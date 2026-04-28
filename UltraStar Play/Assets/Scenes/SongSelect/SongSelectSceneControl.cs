@@ -408,15 +408,19 @@ public class SongSelectSceneControl : MonoBehaviour, INeedInjection, IBinder, II
     {
         using IDisposable d = ProfileMarkerUtils.Auto("SongSelectScene.InitSongRouletteSongMetas");
 
+        if (sceneData.SongMeta != null)
+        {
+            // Returning from sing scene: clear search and start at a random song
+            songSearchControl.ResetSearchText();
+        }
+
         UpdateFilteredSongs();
         songRouletteControl.Selection.Subscribe(newValue => songSelectSelectedSongDetailsControl.OnSongSelectionChanged(newValue));
         songRouletteControl.SelectionClickedEventStream
             .Subscribe(_ => AttemptStartSelectedEntry());
 
-        if (sceneData.SongMeta != null)
-        {
-            songRouletteControl.SelectEntryBySongMeta(sceneData.SongMeta);
-        }
+        // On first entry or after sing, start at a random position rather than always first song
+        SelectRandomSong();
     }
 
     public void DoFuzzySearch(string text)
@@ -1018,6 +1022,8 @@ public class SongSelectSceneControl : MonoBehaviour, INeedInjection, IBinder, II
             .Where(PlaylistMatches)
             .Where(ActiveFiltersMatches)
             .Where(CurrentFolderMatches)
+            .GroupBy(songMeta => SongMetaUtils.GetAbsoluteSongMetaFilePath(songMeta)?.ToLowerInvariant() ?? $"{songMeta.Artist?.ToLowerInvariant()}|{songMeta.Title?.ToLowerInvariant()}")
+            .Select(g => g.OrderBy(s => SongMetaUtils.AudioResourceExists(s) ? 0 : 1).First())
             .OrderBy(songMeta => SongMetaUtils.AudioResourceExists(songMeta) ? 0 : 1)
             .ThenBy(songMeta => GetPrimarySongMetaOrderByProperty(songMeta), songMetaPropertyComparer)
             .ThenBy(songMeta => GetSecondarySongMetaOrderByProperty(songMeta), songMetaPropertyComparer)

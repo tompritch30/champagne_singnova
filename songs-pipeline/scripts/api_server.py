@@ -171,9 +171,8 @@ class Handler(BaseHTTPRequestHandler):
                 cmd = [sys.executable, str(fetch_script), "--id", usdb_id]
             new_proc = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
             with _downloads_lock:
                 _downloads[usdb_id] = new_proc
