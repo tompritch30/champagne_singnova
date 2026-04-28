@@ -32,7 +32,7 @@ _API_LOG_PATH = PIPELINE_DIR / "logs" / "api_downloads.log"
 _API_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 _api_logger = logging.getLogger("api_server")
 _api_logger.setLevel(logging.DEBUG)
-_handler = logging.FileHandler(_API_LOG_PATH)
+_handler = logging.FileHandler(_API_LOG_PATH, encoding='utf-8')
 _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
 _api_logger.addHandler(_handler)
 
