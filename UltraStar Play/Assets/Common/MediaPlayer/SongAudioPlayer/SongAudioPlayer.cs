@@ -264,7 +264,13 @@ public class SongAudioPlayer : MonoBehaviour, INeedInjection, ISongMediaPlayer<S
         string audioUri = SongMetaUtils.GetAudioUri(songMeta);
         if (!SongMetaUtils.AudioResourceExists(songMeta))
         {
-            throw new SongAudioPlayerException($"Audio resource does not exist: {audioUri}");
+            // Try reloading SongMeta in case files were just downloaded
+            SongMetaManager.Instance.ReloadSong(songMeta);
+            audioUri = SongMetaUtils.GetAudioUri(songMeta);
+            if (!SongMetaUtils.AudioResourceExists(songMeta))
+            {
+                throw new SongAudioPlayerException($"Audio resource does not exist: {audioUri}");
+            }
         }
 
         AudioLoadedEvent evt = await DoLoadAndPlayAsync(audioUri, audioSupportProviders, streamAudio, startPositionInMillis);

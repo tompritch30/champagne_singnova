@@ -20,8 +20,13 @@ public static class SongEditorAudioWaveformUtils
 
         if (!SongMetaUtils.AudioResourceExists(songMeta))
         {
-            Debug.Log($"Audio file resource does not exist {audioUri}");
-            return null;
+            // Try reloading SongMeta in case files were just downloaded
+            SongMetaManager.Instance.ReloadSong(songMeta);
+            if (!SongMetaUtils.AudioResourceExists(songMeta))
+            {
+                Debug.Log($"Audio file resource does not exist {audioUri}");
+                return null;
+            }
         }
 
         string fileExtension = Path.GetExtension(new Uri(audioUri).LocalPath);
