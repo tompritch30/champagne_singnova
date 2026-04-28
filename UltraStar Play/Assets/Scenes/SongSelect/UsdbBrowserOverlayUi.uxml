@@ -1,0 +1,41 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" editor-extension-mode="False">
+    <ui:VisualElement name="usdbBrowserOverlay" style="position: absolute; width: 100%; height: 100%; background-color: rgba(16, 16, 24, 0.85); align-items: center; justify-content: center; display: none;">
+        <ui:VisualElement name="usdbBrowserPanel" class="roundCorners staticPanel" style="width: 78%; height: 82%; flex-direction: column; padding-left: 0; padding-right: 0; padding-top: 0; padding-bottom: 0; overflow: hidden;">
+
+            <!-- Header -->
+            <ui:VisualElement name="usdbBrowserHeader" style="flex-direction: row; align-items: center; padding-left: 12px; padding-right: 8px; padding-top: 8px; padding-bottom: 8px; border-bottom-width: 1px; border-bottom-color: rgba(255, 255, 255, 0.12);">
+                <MaterialIcon icon="cloud_download" name="usdbBrowserTitleIcon" style="font-size: 22px; margin-right: 8px;" />
+                <ui:Label text="Browse USDB Catalog" name="usdbBrowserTitle" style="-unity-font-style: bold; font-size: 16px; flex-grow: 1;" />
+                <ui:Label text="18500 songs" name="usdbBrowserCatalogSizeLabel" class="secondaryFontColor smallFont" style="margin-right: 12px;" />
+                <ui:Button name="usdbBrowserCloseButton" class="squareButton transparentButton" style="padding-top: 0; padding-bottom: 0; padding-left: 0; padding-right: 0; width: 26px; height: 26px;">
+                    <MaterialIcon icon="close" picking-mode="Ignore" style="font-size: 20px;" />
+                </ui:Button>
+            </ui:VisualElement>
+
+            <!-- Search bar -->
+            <ui:VisualElement name="usdbBrowserSearchRow" style="flex-direction: row; align-items: center; padding-left: 12px; padding-right: 12px; padding-top: 8px; padding-bottom: 8px; border-bottom-width: 1px; border-bottom-color: rgba(255, 255, 255, 0.08);">
+                <ui:TextField name="usdbBrowserSearchField" style="flex-grow: 1; margin-right: 8px; height: 28px;">
+                    <ui:Label tabindex="-1" text="Search artist or title..." name="usdbBrowserSearchHint" class="textFieldHint secondaryFontColor" />
+                </ui:TextField>
+                <ui:Button name="usdbBrowserSearchButton" style="height: 28px; padding-left: 12px; padding-right: 12px;">
+                    <ui:Label tabindex="-1" text="Search" picking-mode="Ignore" />
+                </ui:Button>
+            </ui:VisualElement>
+
+            <!-- Status label -->
+            <ui:Label name="usdbBrowserStatusLabel" text="Type to search 18,500 songs from USDB." class="secondaryFontColor smallFont" style="padding-left: 12px; padding-right: 12px; padding-top: 4px; padding-bottom: 4px;" />
+
+            <!-- Column headers -->
+            <ui:VisualElement name="usdbBrowserColumnHeaders" style="flex-direction: row; padding-left: 12px; padding-right: 12px; padding-top: 2px; padding-bottom: 2px; border-bottom-width: 1px; border-bottom-color: rgba(255, 255, 255, 0.08);">
+                <ui:Label text="Artist" class="smallFont secondaryFontColor" style="width: 28%; -unity-font-style: bold;" />
+                <ui:Label text="Title" class="smallFont secondaryFontColor" style="flex-grow: 1; -unity-font-style: bold;" />
+                <ui:Label text="Year" class="smallFont secondaryFontColor" style="width: 50px; -unity-text-align: middle-right; -unity-font-style: bold;" />
+                <ui:Label text="Status" class="smallFont secondaryFontColor" style="width: 120px; -unity-text-align: middle-right; -unity-font-style: bold;" />
+            </ui:VisualElement>
+
+            <!-- Results list (populated from C#) -->
+            <ui:ScrollView name="usdbBrowserScrollView" horizontal-scroller-visibility="Hidden" style="flex-grow: 1; padding-left: 4px; padding-right: 4px;" />
+
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

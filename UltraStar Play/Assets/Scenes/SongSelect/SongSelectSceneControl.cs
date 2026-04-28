@@ -9,6 +9,7 @@ using UniRx;
 using Unity.Profiling;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.Networking;
 using UnityEngine.UIElements;
 using IBinding = UniInject.IBinding;
 
@@ -116,7 +117,11 @@ public class SongSelectSceneControl : MonoBehaviour, INeedInjection, IBinder, II
     [Inject(UxmlName = R.UxmlNames.selectRandomSongButton)]
     private Button selectRandomSongButton;
 
+    [Inject(UxmlName = "toggleUsdbBrowserButton")]
+    private Button toggleUsdbBrowserButton;
+
     private readonly SongSearchControl songSearchControl = new();
+    private readonly UsdbBrowserControl usdbBrowserControl = new();
 
     public ReactiveProperty<int> RunningSongRepositorySearches { get; set; } = new(0);
 
@@ -171,6 +176,9 @@ public class SongSelectSceneControl : MonoBehaviour, INeedInjection, IBinder, II
         injector.Inject(songSelectSongQueueControl);
         injector.Inject(songSelectModifiersControl);
         injector.Inject(songSelectDifficultyAndScoreModeControl);
+        injector.Inject(usdbBrowserControl);
+
+        toggleUsdbBrowserButton.RegisterCallbackButtonTriggered(_ => usdbBrowserControl.Show());
     }
 
     private void Start()
@@ -533,6 +541,14 @@ public class SongSelectSceneControl : MonoBehaviour, INeedInjection, IBinder, II
             return;
         }
 
+        // If this is a USDB catalog stub (no audio yet), auto-download then play.
+        string usdbId = songMeta.GetAdditionalHeaderEntry("USDBID");
+        if (!usdbId.IsNullOrEmpty() && !SongMetaUtils.AudioResourceExists(songMeta))
+        {
+            await DownloadThenPlayAsync(songMeta, usdbId);
+            return;
+        }
+
         // Check that there is associated sing-along data. If not, ask to open song editor.
         if (!SongMetaUtils.HasSingAlongData(songMeta))
         {
@@ -571,6 +587,134 @@ public class SongSelectSceneControl : MonoBehaviour, INeedInjection, IBinder, II
                 "name", songMeta.Audio,
                 "supportedFormats", ApplicationUtils.supportedAudioFiles.JoinWith(", ")));
         }
+    }
+
+    private bool downloadCancelled;
+
+    private async Awaitable DownloadThenPlayAsync(SongMeta songMeta, string usdbId)
+    {
+        const string apiBase = "http://127.0.0.1:5123";
+
+        // Build progress dialog
+        downloadCancelled = false;
+        MessageDialogControl dlg = dialogManager.CreateDialogControl(
+            Translation.Of($"{songMeta.Artist} - {songMeta.Title}"));
+
+        Label statusLabel = new("Starting download...");
+        statusLabel.style.unityTextAlign = TextAnchor.MiddleCenter;
+        statusLabel.style.marginBottom = 8;
+        dlg.AddVisualElement(statusLabel);
+
+        ProgressBar progressBar = new();
+        progressBar.lowValue = 0;
+        progressBar.highValue = 100;
+        progressBar.value = 0;
+        progressBar.style.width = new Length(100, LengthUnit.Percent);
+        progressBar.style.height = 20;
+        dlg.AddVisualElement(progressBar);
+
+        dlg.AddButton(Translation.Of("Cancel"), _ =>
+        {
+            downloadCancelled = true;
+            dlg.CloseDialog();
+        });
+
+        // Kick off download
+        try
+        {
+            string body = $"{{\"usdb_id\":\"{usdbId}\"}}";
+            byte[] bodyBytes = System.Text.Encoding.UTF8.GetBytes(body);
+            using UnityWebRequest req = new(apiBase + "/api/download", "POST");
+            req.uploadHandler = new UploadHandlerRaw(bodyBytes);
+            req.downloadHandler = new DownloadHandlerBuffer();
+            req.SetRequestHeader("Content-Type", "application/json");
+            req.timeout = 8;
+            await WebRequestUtils.SendWebRequestAsync(req);
+        }
+        catch (Exception ex)
+        {
+            statusLabel.text = $"Cannot reach download server.\nStart api_server.py first.\n({ex.Message})";
+            dlg.AddButton(Translation.Of("OK"), _ => dlg.CloseDialog());
+            return;
+        }
+
+        // Poll until complete, failed, or cancelled
+        float[] stageProgress = { 5f, 15f, 35f, 55f, 75f, 90f, 95f };
+        string[] stageLabels =
+        {
+            "Fetching song info...",
+            "Downloading audio...",
+            "Downloading audio...",
+            "Downloading video...",
+            "Downloading video...",
+            "Processing files...",
+            "Almost done..."
+        };
+
+        for (int attempt = 0; attempt < 120; attempt++)
+        {
+            await Awaitable.WaitForSecondsAsync(3f);
+
+            if (downloadCancelled)
+                return;
+
+            try
+            {
+                using UnityWebRequest poll = UnityWebRequest.Get($"{apiBase}/api/status?usdb_id={usdbId}");
+                poll.timeout = 5;
+                await WebRequestUtils.SendWebRequestAsync(poll);
+
+                if (downloadCancelled)
+                    return;
+
+                string json = poll.downloadHandler.text;
+                string status = ExtractJsonString(json, "status");
+                bool running = json.Contains("\"running\":true");
+
+                if (status == "complete")
+                {
+                    progressBar.value = 100;
+                    statusLabel.text = "Download complete! Starting song...";
+                    await Awaitable.WaitForSecondsAsync(0.5f);
+                    dlg.CloseDialog();
+                    songMetaManager.RescanSongs();
+                    await Awaitable.WaitForSecondsAsync(2f);
+                    sceneNavigator.LoadScene(EScene.SongSelectScene);
+                    return;
+                }
+
+                if (status == "failed" || (!running && status != "indexed" && attempt > 5))
+                {
+                    statusLabel.text = "Download failed. Check api_server.py logs.";
+                    progressBar.value = 0;
+                    dlg.AddButton(Translation.Of("OK"), _ => dlg.CloseDialog());
+                    return;
+                }
+
+                // Animate progress through stages while running
+                int stage = Mathf.Min(attempt, stageProgress.Length - 1);
+                progressBar.value = stageProgress[stage];
+                statusLabel.text = stageLabels[stage];
+            }
+            catch
+            {
+                // Network hiccup — keep polling
+            }
+        }
+
+        statusLabel.text = "Download timed out. Check api_server.py logs.";
+        dlg.AddButton(Translation.Of("OK"), _ => dlg.CloseDialog());
+    }
+
+    private static string ExtractJsonString(string json, string key)
+    {
+        // Minimal JSON string field extractor — avoids a JSON library import in this file.
+        string search = $"\"{key}\":\"";
+        int start = json.IndexOf(search, StringComparison.Ordinal);
+        if (start < 0) return "";
+        start += search.Length;
+        int end = json.IndexOf('"', start);
+        return end < 0 ? "" : json.Substring(start, end - start);
     }
 
     private void ShowFailedToLoadVoicesDialog(SongMeta songMeta)
@@ -874,7 +1018,8 @@ public class SongSelectSceneControl : MonoBehaviour, INeedInjection, IBinder, II
             .Where(PlaylistMatches)
             .Where(ActiveFiltersMatches)
             .Where(CurrentFolderMatches)
-            .OrderBy(songMeta => GetPrimarySongMetaOrderByProperty(songMeta), songMetaPropertyComparer)
+            .OrderBy(songMeta => SongMetaUtils.AudioResourceExists(songMeta) ? 0 : 1)
+            .ThenBy(songMeta => GetPrimarySongMetaOrderByProperty(songMeta), songMetaPropertyComparer)
             .ThenBy(songMeta => GetSecondarySongMetaOrderByProperty(songMeta), songMetaPropertyComparer)
             .ToList();
         return filteredSongs;

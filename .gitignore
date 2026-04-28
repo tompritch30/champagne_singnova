@@ -83,3 +83,23 @@ MelodyMania-Data.lnk
 UltraStar Play - Data.lnk
 Unity-Editor-Log.lnk
 Steam Workshop Content.lnk
+
+# New ones
+Singstar/
+*.meta
+*.asset
+*.spriteatlas
+*.asmdef
+*.asmref
+*.shader
+*.cginc
+
+# Songs pipeline
+songs-pipeline/config.json
+songs-pipeline/songs.db
+songs-pipeline/downloads/
+songs-pipeline/logs/
+songs-pipeline/shortlist/
+
+.env
+

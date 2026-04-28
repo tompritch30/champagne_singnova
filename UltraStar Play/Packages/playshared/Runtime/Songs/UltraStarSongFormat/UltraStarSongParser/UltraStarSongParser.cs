@@ -446,6 +446,7 @@ public static class UltraStarSongParser
             case "FIXER":
             case "P1":
             case "P2":
+            case "USDBID":
                 // Known additional header entry
                 songMeta.SetAdditionalHeaderEntry(key, value);
                 break;

@@ -138,7 +138,8 @@ public class SongSelectSongPreviewControl : SongPreviewControl
 
     protected override async Awaitable StartAudioPreviewAsync(SongMeta songMeta, int previewStartInMillis)
     {
-        if (currentSongSelectEntryControl == null)
+        if (currentSongSelectEntryControl == null
+            || !SongMetaUtils.AudioResourceExists(songMeta))
         {
             return;
         }

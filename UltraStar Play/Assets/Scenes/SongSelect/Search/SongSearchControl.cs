@@ -267,11 +267,24 @@ public class SongSearchControl : INeedInjection, IInjectionFinishedListener
             return songMetas;
         }
 
-        // Split searchText at whitespaces and match each word individually
-        string[] searchTexts = searchText.Split(Array.Empty<char>(), StringSplitOptions.RemoveEmptyEntries);
+        // Fuzzy-ranked search: score artist+title with trigram similarity,
+        // fall back to boolean property match for genre/year/tag queries.
+        string[] searchWords = searchText.Split(Array.Empty<char>(), StringSplitOptions.RemoveEmptyEntries);
         List<SongMeta> filteredSongs = songMetas
-            .Where(songMeta => searchTexts.IsNullOrEmpty()
-                               || searchTexts.AllMatch(searchWord => SongMetaMatchesSearchedProperties(songMeta, searchWord)))
+            .Select(songMeta =>
+            {
+                float score = FuzzySearchScorer.ScoreSong(songMeta, searchWords);
+                if (score <= 0f
+                    && !searchWords.IsNullOrEmpty()
+                    && searchWords.AllMatch(w => SongMetaMatchesSearchedProperties(songMeta, w)))
+                {
+                    score = 0.01f;
+                }
+                return (SongMeta: songMeta, Score: score);
+            })
+            .Where(pair => pair.Score > 0f)
+            .OrderByDescending(pair => pair.Score)
+            .Select(pair => pair.SongMeta)
             .ToList();
         return filteredSongs;
     }
@@ -545,6 +558,9 @@ public class SongSearchControl : INeedInjection, IInjectionFinishedListener
         string currentOrderPropertyValue = GetPropertyValue(currentEntry.SongMeta, currentOrderProperty);
         if (currentOrderPropertyValue.IsNullOrEmpty())
         {
+            // Stub song with no value for the current sort property — just step one entry
+            if (direction > 0) songRouletteControl.SelectNextEntry();
+            else songRouletteControl.SelectPreviousEntry();
             return;
         }
 
