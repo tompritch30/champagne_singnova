@@ -16,15 +16,25 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import logging
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 if not getattr(sys, "frozen", False):
     sys.path.insert(0, str(Path(__file__).parent))
-from _common import DB_PATH, load_config
+from _common import DB_PATH, load_config, PIPELINE_DIR
 
 PORT = 5123
+
+# Setup logging for API subprocess calls
+_API_LOG_PATH = PIPELINE_DIR / "logs" / "api_downloads.log"
+_API_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+_api_logger = logging.getLogger("api_server")
+_api_logger.setLevel(logging.DEBUG)
+_handler = logging.FileHandler(_API_LOG_PATH)
+_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+_api_logger.addHandler(_handler)
 
 _downloads_lock = threading.Lock()
 _downloads: dict[str, subprocess.Popen] = {}  # usdb_id -> running Popen
@@ -166,26 +176,46 @@ class Handler(BaseHTTPRequestHandler):
             if getattr(sys, "frozen", False):
                 fetch_exe = Path(sys.executable).parent / "fetch_song.exe"
                 cmd = [str(fetch_exe), "--id", usdb_id]
+                fetch_script = fetch_exe
+                cwd = Path(sys.executable).parent
             else:
                 fetch_script = Path(__file__).parent / "fetch_song.py"
                 cmd = [sys.executable, str(fetch_script), "--id", usdb_id]
+                cwd = Path(__file__).parent.parent  # songs-pipeline directory
+            
             new_proc = subprocess.Popen(
                 cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=str(cwd),
             )
             with _downloads_lock:
                 _downloads[usdb_id] = new_proc
 
-            # Clean up finished downloads in background
+            # Log subprocess result in background
             def _cleanup():
-                new_proc.wait()
+                _log_subprocess_result(usdb_id, new_proc, fetch_script)
             threading.Thread(target=_cleanup, daemon=True).start()
 
             self._json({"started": True, "usdb_id": usdb_id})
 
         else:
             self._json({"error": "not found"}, 404)
+
+
+def _log_subprocess_result(usdb_id: str, proc: subprocess.Popen, fetch_script: Path) -> None:
+    """Wait for subprocess and log results."""
+    stdout_data, stderr_data = proc.communicate()
+    if proc.returncode != 0:
+        stderr_output = stderr_data.decode('utf-8', errors='replace') if stderr_data else ""
+        stdout_output = stdout_data.decode('utf-8', errors='replace') if stdout_data else ""
+        _api_logger.error(f"Download failed for USDB ID {usdb_id}; exit code {proc.returncode}")
+        if stderr_output:
+            _api_logger.error(f"stderr: {stderr_output[:1000]}")
+        if stdout_output:
+            _api_logger.debug(f"stdout: {stdout_output[:1000]}")
+    else:
+        _api_logger.info(f"Download succeeded for USDB ID {usdb_id}")
 
 
 def main() -> None:
