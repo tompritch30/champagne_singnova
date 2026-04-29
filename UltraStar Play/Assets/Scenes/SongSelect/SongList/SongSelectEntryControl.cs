@@ -41,6 +41,9 @@ public class SongSelectEntryControl : INeedInjection, IInjectionFinishedListener
     [Inject(UxmlName = R.UxmlNames.folderPreviewImage)]
     private VisualElement folderPreviewImage;
 
+    [Inject(Optional = true, UxmlName = "songCoverLetter")]
+    private Label songCoverLetter;
+
     [Inject(UxmlName = R.UxmlNames.songArtist)]
     private Label songArtist;
 
@@ -403,6 +406,9 @@ public class SongSelectEntryControl : INeedInjection, IInjectionFinishedListener
 
         notAvailableInOnlineGameIcon.HideByDisplay();
 
+        // Paint letter fallback synchronously so winged-mic NoCover never shows
+        LetterArtUtils.ApplyLetterFallback(songMeta, songImageOuter, songImageInner, songCoverLetter);
+
         try
         {
             string uri = await SongMetaImageUtils.GetCoverOrBackgroundImageUriAsync(songMeta);
@@ -413,7 +419,7 @@ public class SongSelectEntryControl : INeedInjection, IInjectionFinishedListener
 
             if (uri.IsNullOrEmpty())
             {
-                SongMetaImageUtils.SetDefaultSongImageAndColor(songMeta, songImageOuter, songImageInner);
+                // No cover — letter fallback already applied above
                 return;
             }
 
@@ -425,9 +431,9 @@ public class SongSelectEntryControl : INeedInjection, IInjectionFinishedListener
 
             if (sprite == null)
             {
-                SongMetaImageUtils.SetDefaultSongImageAndColor(songMeta, songImageOuter, songImageInner);
                 return;
             }
+            LetterArtUtils.HideLetter(songImageOuter, songCoverLetter);
             SongMetaImageUtils.SetCoverOrBackgroundImageAsync(sprite, songImageOuter, songImageInner);
         }
         catch (Exception ex)
@@ -438,7 +444,7 @@ public class SongSelectEntryControl : INeedInjection, IInjectionFinishedListener
             {
                 return;
             }
-            SongMetaImageUtils.SetDefaultSongImageAndColor(songMeta, songImageOuter, songImageInner);
+            // Letter fallback already applied
         }
     }
 
@@ -463,9 +469,15 @@ public class SongSelectEntryControl : INeedInjection, IInjectionFinishedListener
     {
         songImageOuter.style.backgroundImage = new StyleBackground(StyleKeyword.Undefined);
         songImageOuter.style.unityBackgroundImageTintColor = new StyleColor(Color.clear);
+        songImageOuter.style.backgroundColor = new StyleColor(new Color(0.18f, 0.18f, 0.18f, 1f));
 
         songImageInner.style.backgroundImage = new StyleBackground(StyleKeyword.Undefined);
         songImageInner.style.unityBackgroundImageTintColor = new StyleColor(Color.clear);
+
+        if (songCoverLetter != null)
+        {
+            songCoverLetter.style.display = DisplayStyle.None;
+        }
 
         folderImage.ShowByDisplay();
         UpdateFolderPreviewImage(folderEntry);
@@ -494,15 +506,19 @@ public class SongSelectEntryControl : INeedInjection, IInjectionFinishedListener
 
     private void SetDefaultSongCoverImageWithColor()
     {
-        SongMetaImageUtils.SetDefaultSongImage(songImageOuter, songImageInner);
         if (SongSelectEntry is SongSelectSongEntry songEntry)
         {
-            SongMetaImageUtils.SetDefaultSongImageColor(songEntry.SongMeta, songImageOuter, songImageInner);
+            LetterArtUtils.ApplyLetterFallback(songEntry.SongMeta, songImageOuter, songImageInner, songCoverLetter);
         }
         else
         {
-            songImageOuter.style.unityBackgroundImageTintColor = new StyleColor(StyleKeyword.Undefined);
-            songImageInner.style.unityBackgroundImageTintColor = new StyleColor(StyleKeyword.Undefined);
+            songImageOuter.style.backgroundImage = new StyleBackground(StyleKeyword.None);
+            songImageOuter.style.backgroundColor = new StyleColor(new Color(0.10f, 0.10f, 0.10f, 1f));
+            songImageInner.style.backgroundImage = new StyleBackground(StyleKeyword.None);
+            if (songCoverLetter != null)
+            {
+                songCoverLetter.style.display = DisplayStyle.None;
+            }
         }
     }
 

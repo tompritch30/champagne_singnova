@@ -4,7 +4,10 @@
       "Bash(python3 *)",
       "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('SongDirs', d.get\\('songDirs', 'KEY_NOT_FOUND'\\)\\), indent=2\\)\\)\")",
       "Bash(ffmpeg -version)",
-      "Bash(python \"D:/thoma/Documents/code/champagne_singnova/songs-pipeline/scripts/fetch_song.py\" --id 25887)"
+      "Bash(python \"D:/thoma/Documents/code/champagne_singnova/songs-pipeline/scripts/fetch_song.py\" --id 25887)",
+      "Bash(xargs grep *)",
+      "Bash(grep -v \"^--$\")",
+      "Read(//d/thoma/Documents/code/champagne_singnova/**)"
     ]
   }
 }

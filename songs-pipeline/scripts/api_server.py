@@ -12,6 +12,7 @@ Endpoints:
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -188,6 +189,7 @@ class Handler(BaseHTTPRequestHandler):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=str(cwd),
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
             )
             with _downloads_lock:
                 _downloads[usdb_id] = new_proc

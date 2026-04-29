@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using UniInject;
@@ -6,13 +6,18 @@ using UniRx;
 using UnityEngine;
 using UnityEngine.UIElements;
 
-// Disable warning about fields that are never assigned, their values are injected.
 #pragma warning disable CS0649
 
+/**
+ * Drives the song list as a virtualized vertical ListView.
+ *
+ * Class name preserved (originally "SongRouletteControl") so the existing
+ * Inspector binding on SongSelectSceneControlsContainer.prefab and the
+ * 19 dependent files keep working unchanged. The "wheel" is gone.
+ */
 public class SongRouletteControl : MonoBehaviour, INeedInjection
 {
-    private const float MaxTransitionToSelectedItemTimeInSeconds = 0.5f;
-    private const bool DynamicListViewItemsSize = true;
+    public const float RowHeight = 56f;
 
     public VisualTreeAsset songEntryUi;
 
@@ -31,18 +36,14 @@ public class SongRouletteControl : MonoBehaviour, INeedInjection
     [Inject]
     private NonPersistentSettings nonPersistentSettings;
 
-    // TODO: searchControl should not be known to this class
     [Inject]
     private SongSearchControl songSearchControl;
 
     [Inject(UxmlName = R.UxmlNames.songListView)]
-    private ListViewH songListView;
+    private ListView songListView;
 
     private List<SongSelectEntry> entries = new();
     public IReadOnlyList<SongSelectEntry> Entries => entries;
-
-    // private List<SongMeta> songs = new();
-    // public IReadOnlyList<SongMeta> Songs => songs;
 
     public IReactiveProperty<SongSelectEntrySelection> Selection { get; private set; } = new ReactiveProperty<SongSelectEntrySelection>();
 
@@ -54,11 +55,6 @@ public class SongRouletteControl : MonoBehaviour, INeedInjection
 
     private readonly Subject<SongSelectEntry> submitEventStream = new();
     public IObservable<SongSelectEntry> SubmitEventStream => submitEventStream;
-
-    private ScrollView songListViewScrollView;
-    private int DummyScrollViewItemCountPerSide => DynamicListViewItemsSize
-        ? 3
-        : 0;
 
     public int SelectedEntryIndex
     {
@@ -88,25 +84,17 @@ public class SongRouletteControl : MonoBehaviour, INeedInjection
     public IReadOnlyList<SongSelectSongEntry> SongEntries => entries.OfType<SongSelectSongEntry>().ToList();
 
     private bool isInitialized;
-
-    private bool isPointerDownOnListView;
-
     private float lastPlaySongSelectSoundEffectTimeInSeconds;
-
-    private float transitionToSelectedItemTimeInSeconds;
-    private float transitionStartScrollOffsetX;
-
     private SongSelectEntry initiallySelectedEntry;
-
-    private Vector2 lastScrollOffset;
 
     private void Start()
     {
         using IDisposable d = ProfileMarkerUtils.Auto("SongRouletteControl.Start");
 
-        songListViewScrollView = songListView.Q<ScrollView>();
+        songListView.fixedItemHeight = RowHeight;
+        songListView.selectionType = SelectionType.Single;
+        songListView.virtualizationMethod = CollectionVirtualizationMethod.FixedHeight;
 
-        songListView.RegisterCallback<WheelEvent>(evt => evt.StopImmediatePropagation(), TrickleDown.TrickleDown);
         songListView.RegisterCallback<KeyDownEvent>(evt =>
         {
             if (entries.IsNullOrEmpty())
@@ -117,13 +105,8 @@ public class SongRouletteControl : MonoBehaviour, INeedInjection
             if ((evt.keyCode == KeyCode.End && Selection.Value.Index == entries.Count - 1)
                 || (evt.keyCode == KeyCode.Home && Selection.Value.Index == 0))
             {
-                // Already selected the first / last item
                 evt.StopImmediatePropagation();
             }
-        }, TrickleDown.TrickleDown);
-        songListView.RegisterCallback<PointerDownEvent>(_ =>
-        {
-            isPointerDownOnListView = true;
         }, TrickleDown.TrickleDown);
 
         songListView.RegisterCallback<NavigationSubmitEvent>(_ =>
@@ -140,16 +123,20 @@ public class SongRouletteControl : MonoBehaviour, INeedInjection
             }
         }, TrickleDown.TrickleDown);
 
-        // Hide scroll bars
-        settings.ObserveEveryValueChanged(_ => settings.ShowScrollBarInSongSelect)
-            .Subscribe(newValue =>
-            {
-                songListViewScrollView.horizontalScrollerVisibility = newValue
-                    ? ScrollerVisibility.Auto
-                    : ScrollerVisibility.Hidden;
-            })
-            .AddTo(gameObject);
-        songListViewScrollView.verticalScrollerVisibility = ScrollerVisibility.Hidden;
+        ScrollView listViewScrollView = songListView.Q<ScrollView>();
+        if (listViewScrollView != null)
+        {
+            settings.ObserveEveryValueChanged(_ => settings.ShowScrollBarInSongSelect)
+                .Subscribe(newValue =>
+                {
+                    listViewScrollView.verticalScrollerVisibility = newValue
+                        ? ScrollerVisibility.Auto
+                        : ScrollerVisibility.Hidden;
+                })
+                .AddTo(gameObject);
+            listViewScrollView.horizontalScrollerVisibility = ScrollerVisibility.Hidden;
+        }
+
         songListView.makeItem = OnMakeItem;
         songListView.bindItem = OnBindItem;
         songListView.unbindItem = OnUnbindItem;
@@ -159,7 +146,6 @@ public class SongRouletteControl : MonoBehaviour, INeedInjection
 
         isInitialized = true;
 
-        // Populate the list with the songs that were set before the control was initialized.
         if (!entries.IsNullOrEmpty())
         {
             SetEntries(entries);
@@ -190,8 +176,6 @@ public class SongRouletteControl : MonoBehaviour, INeedInjection
     private void DoSelectInitialEntry()
     {
         SelectEntry(initiallySelectedEntry);
-        transitionStartScrollOffsetX = songListViewScrollView.scrollOffset.x;
-        transitionToSelectedItemTimeInSeconds = -MaxTransitionToSelectedItemTimeInSeconds;
     }
 
     private void OnUnbindItem(VisualElement element, int index)
@@ -213,27 +197,19 @@ public class SongRouletteControl : MonoBehaviour, INeedInjection
 
     private void OnBindItem(VisualElement element, int index)
     {
-        if (index < DummyScrollViewItemCountPerSide
-            || index >= (entries.Count + DummyScrollViewItemCountPerSide))
+        if (index < 0 || index >= entries.Count)
         {
             element.HideByVisibility();
-            // element.style.opacity = 0.33f;
             return;
         }
         element.ShowByVisibility();
-        // element.style.opacity = 1;
 
-        SongSelectEntry entry = entries[index - DummyScrollViewItemCountPerSide];
+        SongSelectEntry entry = entries[index];
         element.userData = entry;
         CreateEntryControl(entry, element);
-        if (songListView.selectedIndex == index)
-        {
-            ApplyThemeStyleUtils.SetListViewItemActive(songListView, element, true);
-        }
-        else
-        {
-            ApplyThemeStyleUtils.SetListViewItemActive(songListView, element, false);
-        }
+
+        bool isSelected = songListView.selectedIndex == index;
+        ApplyThemeStyleUtils.SetListViewItemActive(songListView, element, isSelected);
     }
 
     private VisualElement OnMakeItem()
@@ -260,158 +236,22 @@ public class SongRouletteControl : MonoBehaviour, INeedInjection
 
     private void Update()
     {
-        if (!DynamicListViewItemsSize)
-        {
-            return;
-        }
-
-        if (!InputUtils.IsPointerDown())
-        {
-            // Reset the transition time on pointer up.
-            if (isPointerDownOnListView)
-            {
-                StartTransition();
-            }
-            isPointerDownOnListView = false;
-
-            UpdateScrollSelectedListViewItemToCenter();
-        }
-
         entryControls.ForEach(entryControl => entryControl.Update());
-    }
-
-    private void LateUpdate()
-    {
-        // React to changed scrollOffset in LateUpdated to ensure Unity has calculated the UI layout.
-        if (Math.Abs(lastScrollOffset.x - songListViewScrollView.scrollOffset.x) > 0.1f)
-        {
-            lastScrollOffset = songListViewScrollView.scrollOffset;
-            OnScrollOffsetChanged();
-        }
-    }
-
-    private void UpdateScrollSelectedListViewItemToCenter()
-    {
-        if (songListView == null
-            || songListViewScrollView == null
-            || songListView.itemsSource == null
-            || !VisualElementUtils.HasGeometry(songListView)
-            || !VisualElementUtils.HasGeometry(songListViewScrollView))
-        {
-            return;
-        }
-
-        float selectedItemCenterX = ((songListView.selectedIndex + 1) * songListView.fixedItemWidth) - (songListView.fixedItemWidth / 2);
-        Vector2 listViewCenter = songListView.localBound.center;
-        float targetScrollOffsetX = selectedItemCenterX - listViewCenter.x;
-        targetScrollOffsetX = NumberUtils.Limit(targetScrollOffsetX, 0, songListView.fixedItemWidth * songListView.itemsSource.Count);
-        float scrollOffsetDistance = Mathf.Abs(targetScrollOffsetX - transitionStartScrollOffsetX);
-        if (transitionToSelectedItemTimeInSeconds > 0)
-        {
-            transitionToSelectedItemTimeInSeconds -= Time.deltaTime;
-        }
-        float transitionFactor = 1 - (transitionToSelectedItemTimeInSeconds / MaxTransitionToSelectedItemTimeInSeconds);
-        if (transitionFactor is > 0 and < 1
-            && scrollOffsetDistance < songListView.contentRect.width * 2)
-        {
-            float interpolatedScrollOffsetX = LeanTween.easeOutCubic(transitionStartScrollOffsetX, targetScrollOffsetX, transitionFactor);
-            songListViewScrollView.scrollOffset = new Vector2(
-                interpolatedScrollOffsetX,
-                songListViewScrollView.scrollOffset.y);
-        }
-        else if (Mathf.Abs(songListViewScrollView.scrollOffset.x - targetScrollOffsetX) > 0.01f)
-        {
-            songListViewScrollView.scrollOffset = new Vector2(
-                targetScrollOffsetX,
-                songListViewScrollView.scrollOffset.y);
-        }
-    }
-
-    private void SelectListViewItemClosestToCenter()
-    {
-        List<VisualElement> listViewItems = songListView.Query(null, "unity-collection-view__item").ToList();
-        VisualElement listViewItemClosestToTheCenter = listViewItems.FindMinElement(listViewItem => Mathf.Abs(listViewItem.worldBound.center.x - songListView.worldBound.center.x));
-        if (listViewItemClosestToTheCenter != null)
-        {
-            SongSelectEntry entry = listViewItemClosestToTheCenter.userData as SongSelectSongEntry;
-            if (entry != null
-                && SelectedEntry != entry)
-            {
-                 SelectEntry(entry);
-            }
-        }
-    }
-
-    private void OnScrollOffsetChanged()
-    {
-        if (!DynamicListViewItemsSize)
-        {
-            return;
-        }
-
-        UpdateListViewItemPositions();
-
-        // Move selected list view item to the center
-        if (isPointerDownOnListView)
-        {
-            // Select list view item that is closest to the center
-            SelectListViewItemClosestToCenter();
-        }
-    }
-
-    private void UpdateListViewItemPositions()
-    {
-        if (!DynamicListViewItemsSize
-            || !VisualElementUtils.HasGeometry(songListView))
-        {
-            return;
-        }
-
-        List<VisualElement> listViewItems = songListView.Query(null, "unity-collection-view__item").ToList();
-        float maxDistanceToCenter = songListView.worldBound.width / 2f;
-        float songListCenterX = songListView.worldBound.center.x;
-        float maxOffset = -50;
-        float maxScaleOffset = 0.5f;
-        foreach (VisualElement listViewItem in listViewItems)
-        {
-            if (!VisualElementUtils.HasGeometry(listViewItem))
-            {
-                continue;
-            }
-
-            float horizontalDistanceToCenter = Mathf.Abs(listViewItem.worldBound.center.x - songListCenterX);
-            float distanceFactor = horizontalDistanceToCenter / maxDistanceToCenter;
-            distanceFactor = NumberUtils.Limit(distanceFactor, 0, 1);
-            listViewItem.style.top = maxOffset * distanceFactor;
-            float scale = 1 - maxScaleOffset * distanceFactor;
-            listViewItem.style.scale = new StyleScale(new Vector2(scale, scale));
-        }
     }
 
     private void OnSongListViewSelectionIndexChanged(IEnumerable<int> selectedIndexes)
     {
         if (InputUtils.IsKeyboardShiftPressed())
         {
-            // Shift is used with arrow keys to select next resp. previous entry by order property
             return;
         }
 
         int selectedIndex = selectedIndexes.FirstOrDefault();
-        if (selectedIndex < DummyScrollViewItemCountPerSide
-            && entries.Count > 0)
+        if (selectedIndex < 0 || selectedIndex >= entries.Count)
         {
-            SetSelectionAndScrollToIndex(0);
             return;
         }
-
-        if(selectedIndex >= entries.Count + DummyScrollViewItemCountPerSide
-           && entries.Count > 0)
-        {
-            SetSelectionAndScrollToIndex(entries.Count - 1);
-            return;
-        }
-
-        SongSelectEntry selectedEntry = entries.ElementAtOrDefault(selectedIndex - DummyScrollViewItemCountPerSide);
+        SongSelectEntry selectedEntry = entries.ElementAtOrDefault(selectedIndex);
         SelectEntry(selectedEntry);
     }
 
@@ -440,14 +280,13 @@ public class SongRouletteControl : MonoBehaviour, INeedInjection
 
     public void SetEntries(IReadOnlyCollection<SongSelectEntry> newEntries)
     {
-        using IDisposable d = ProfileMarkerUtils.Auto("SongSelectRouletteControl.SetEntries");
+        using IDisposable d = ProfileMarkerUtils.Auto("SongRouletteControl.SetEntries");
 
         SongSelectEntry lastSelectedEntry = SelectedEntry;
         entries = new List<SongSelectEntry>(newEntries);
 
         if (!isInitialized)
         {
-            // Remember these entries but do not populate the list yet.
             return;
         }
 
@@ -485,17 +324,7 @@ public class SongRouletteControl : MonoBehaviour, INeedInjection
 
     private void UpdateListViewItems()
     {
-        List<object> itemsSource = new List<object>(entries);
-        if (DynamicListViewItemsSize)
-        {
-            // Add dummy items such that the selected actual list view item can be scrolled to the center
-            for (int i = 0; i < DummyScrollViewItemCountPerSide; i++)
-            {
-                itemsSource.Insert(0, new object());
-                itemsSource.Add(new object());
-            }
-        }
-        songListView.itemsSource = itemsSource;
+        songListView.itemsSource = entries;
         songListView.RefreshItems();
         if (SelectedEntry != null)
         {
@@ -505,39 +334,27 @@ public class SongRouletteControl : MonoBehaviour, INeedInjection
 
     private void SetSelectionAndScrollToIndex(int songIndex)
     {
-        int listViewItemIndex = songIndex + DummyScrollViewItemCountPerSide;
-        if (songListView.selectedIndex == listViewItemIndex)
+        if (songIndex < 0 || songIndex >= entries.Count)
         {
             return;
         }
-        songListView.SetSelection(listViewItemIndex);
-
-        if (!DynamicListViewItemsSize)
+        if (songListView.selectedIndex != songIndex)
         {
-            songListView.ScrollToItem(listViewItemIndex);
+            songListView.SetSelection(songIndex);
         }
-    }
-
-    private int GetEntryIndex(SongSelectEntry entry)
-    {
-        return entries.IndexOf(entry);
+        songListView.ScrollToItem(songIndex);
     }
 
     public SongSelectEntry GetEntryBySongMeta(SongMeta songMeta)
     {
-        SongSelectEntry matchingEntry = entries.FirstOrDefault(entry => entry is SongSelectSongEntry songEntry
-                                                                        && songEntry.SongMeta == songMeta);
-        return matchingEntry;
+        return entries.FirstOrDefault(entry => entry is SongSelectSongEntry songEntry
+                                               && songEntry.SongMeta == songMeta);
     }
 
     public int GetEntryIndexBySongMeta(SongMeta songMeta)
     {
         SongSelectEntry matchingEntry = GetEntryBySongMeta(songMeta);
-        if (matchingEntry == null)
-        {
-            return -1;
-        }
-        return entries.IndexOf(matchingEntry);
+        return matchingEntry == null ? -1 : entries.IndexOf(matchingEntry);
     }
 
     public void SelectEntryBySongMeta(SongMeta songMeta)
@@ -545,19 +362,11 @@ public class SongRouletteControl : MonoBehaviour, INeedInjection
         SelectEntry(GetEntryBySongMeta(songMeta));
     }
 
-    /**
-     * Skips the animation to select an entry.
-     */
-    public void FinishTransition()
-    {
-        transitionToSelectedItemTimeInSeconds = 0;
-    }
+    /** No-op kept for API compatibility (wheel transition is gone). */
+    public void FinishTransition() { }
 
-    public void StartTransition()
-    {
-        transitionToSelectedItemTimeInSeconds = MaxTransitionToSelectedItemTimeInSeconds;
-        transitionStartScrollOffsetX = songListViewScrollView.scrollOffset.x;
-    }
+    /** No-op kept for API compatibility. */
+    public void StartTransition() { }
 
     public void SelectEntry(SongSelectEntry entry)
     {
@@ -566,21 +375,23 @@ public class SongRouletteControl : MonoBehaviour, INeedInjection
             return;
         }
 
-        if(songListViewScrollView == null)
+        if (!isInitialized)
         {
             initiallySelectedEntry = entry;
             return;
         }
 
         int index = entries.IndexOf(entry);
-        if (SelectedEntry == entry
-            && SelectedEntryIndex == index)
+        if (index < 0)
         {
-            // Nothing to change
             return;
         }
 
-        StartTransition();
+        if (SelectedEntry == entry && SelectedEntryIndex == index)
+        {
+            return;
+        }
+
         SetSelectionAndScrollToIndex(index);
         UpdateSongSelectDirectoryPathToLastSelection(entry);
         Selection.Value = new SongSelectEntrySelection(entry, index, entries.Count);
@@ -590,7 +401,6 @@ public class SongRouletteControl : MonoBehaviour, INeedInjection
     {
         if (nonPersistentSettings.SongSelectDirectoryInfo == null)
         {
-            // Not navigating by folder
             return;
         }
 
@@ -613,7 +423,6 @@ public class SongRouletteControl : MonoBehaviour, INeedInjection
         {
             return songEntry.SongMeta.FileInfo?.FullName;
         }
-
         return null;
     }
 
@@ -622,7 +431,6 @@ public class SongRouletteControl : MonoBehaviour, INeedInjection
         if (!wrapAround
             && (index < 0 || entries.Count <= index))
         {
-            // Ignore out-of-range index
             return;
         }
 
@@ -636,7 +444,6 @@ public class SongRouletteControl : MonoBehaviour, INeedInjection
                                    && folderEntry.DirectoryInfo.FullName == path)
                                     || (entry is SongSelectSongEntry songEntry
                                         && songEntry.SongMeta.FileInfo?.FullName == path)));
-
     }
 
     public SongSelectEntry Find(Predicate<SongSelectEntry> predicate)
@@ -651,29 +458,13 @@ public class SongRouletteControl : MonoBehaviour, INeedInjection
 
     public void SelectNextEntry()
     {
-        int nextIndex;
-        if (SelectedEntryIndex < 0)
-        {
-            nextIndex = 0;
-        }
-        else
-        {
-            nextIndex = SelectedEntryIndex + 1;
-        }
+        int nextIndex = SelectedEntryIndex < 0 ? 0 : SelectedEntryIndex + 1;
         SelectEntryByIndex(nextIndex);
     }
 
     public void SelectPreviousEntry()
     {
-        int nextIndex;
-        if (SelectedEntryIndex < 0)
-        {
-            nextIndex = 0;
-        }
-        else
-        {
-            nextIndex = SelectedEntryIndex - 1;
-        }
+        int nextIndex = SelectedEntryIndex < 0 ? 0 : SelectedEntryIndex - 1;
         SelectEntryByIndex(nextIndex);
     }
 
@@ -699,15 +490,13 @@ public class SongRouletteControl : MonoBehaviour, INeedInjection
         {
             wrappedIndexModulo = 0;
         }
-        SongSelectEntry entry = entries[wrappedIndexModulo];
-        return entry;
+        return entries[wrappedIndexModulo];
     }
 
     private void OnEntryClicked(SongSelectEntry entry)
     {
         if (SelectedEntry != null
             && SelectedEntry == entry
-            // Prevent selectionClickedEvent immediately after selection changed
             && Selection.Value.SelectionTime.AddMilliseconds(100) < DateTime.Now)
         {
             selectionClickedEventStream.OnNext(Selection.Value);

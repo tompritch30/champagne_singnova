@@ -1,4 +1,20 @@
 :root {
+    /* Singnova design tokens */
+    --sn-bg: rgb(10, 10, 10);
+    --sn-surface: rgb(20, 20, 20);
+    --sn-surface-2: rgb(22, 22, 22);
+    --sn-surface-3: rgb(28, 28, 28);
+    --sn-border: rgb(26, 26, 26);
+    --sn-border-2: rgb(31, 31, 31);
+    --sn-border-3: rgb(42, 42, 42);
+    --sn-text: rgb(245, 245, 245);
+    --sn-text-2: rgb(163, 163, 163);
+    --sn-text-3: rgb(115, 115, 115);
+    --sn-text-4: rgb(82, 82, 82);
+    --sn-accent: rgb(220, 38, 38);
+    --sn-accent-hover: rgb(239, 68, 68);
+    --sn-success: rgb(110, 231, 183);
+
     --font-color: #F0F0F0;
     --font-color-secondary: #CCCCCC;
     --font-color-inverted: rgb(64, 64, 64);

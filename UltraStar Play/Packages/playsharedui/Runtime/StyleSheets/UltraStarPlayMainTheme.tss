@@ -6,3 +6,4 @@
 @import url("/Packages/playsharedui/Runtime/StyleSheets/CustomControlStyles.uss");
 @import url("/Packages/playsharedui/Runtime/StyleSheets/CommonStyles.uss");
 @import url("/Packages/playsharedui/Runtime/StyleSheets/SceneSpecificStyles.uss");
+@import url("/Packages/playsharedui/Runtime/StyleSheets/SingNovaStyles.uss");

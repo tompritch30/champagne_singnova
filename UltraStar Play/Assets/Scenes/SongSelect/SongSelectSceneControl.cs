@@ -120,6 +120,44 @@ public class SongSelectSceneControl : MonoBehaviour, INeedInjection, IBinder, II
     [Inject(UxmlName = "toggleUsdbBrowserButton")]
     private Button toggleUsdbBrowserButton;
 
+    [Inject(Optional = true, UxmlName = "snNavAllSongs")]
+    private Button snNavAllSongs;
+
+    [Inject(Optional = true, UxmlName = "snNavArtists")]
+    private Button snNavArtists;
+
+    [Inject(Optional = true, UxmlName = "snNavGenres")]
+    private Button snNavGenres;
+
+    [Inject(Optional = true, UxmlName = "snNavDecade")]
+    private Button snNavDecade;
+
+    [Inject(Optional = true, UxmlName = "snNavDownloaded")]
+    private Button snNavDownloaded;
+
+    [Inject(Optional = true, UxmlName = "snFeaturedCards")]
+    private VisualElement snFeaturedCards;
+
+    [Inject(Optional = true, UxmlName = "snNavAllSongsCount")]
+    private Label snNavAllSongsCount;
+
+    [Inject(Optional = true, UxmlName = "snNavArtistsCount")]
+    private Label snNavArtistsCount;
+
+    [Inject(Optional = true, UxmlName = "snNavGenresCount")]
+    private Label snNavGenresCount;
+
+    [Inject(Optional = true, UxmlName = "snNavDecadeCount")]
+    private Label snNavDecadeCount;
+
+    [Inject(Optional = true, UxmlName = "snNavDownloadedCount")]
+    private Label snNavDownloadedCount;
+
+    [Inject(Optional = true, UxmlName = "snLibraryCount")]
+    private Label snLibraryCount;
+
+    private bool showOnlyDownloaded;
+
     private readonly SongSearchControl songSearchControl = new();
     private readonly UsdbBrowserControl usdbBrowserControl = new();
 
@@ -278,6 +316,227 @@ public class SongSelectSceneControl : MonoBehaviour, INeedInjection, IBinder, II
         });
 
         UpdateSceneTitle();
+        InitSidebarNav();
+        InitFeaturedRow();
+        UpdateSidebarBadges();
+
+        // Refresh badges + featured when scan finishes / songs added
+        songMetaManager.SongScanFinishedEventStream.Subscribe(_ =>
+        {
+            UpdateSidebarBadges();
+            InitFeaturedRow();
+        }).AddTo(gameObject);
+        songMetaManager.AddedSongMetaEventStream
+            .Throttle(new TimeSpan(0, 0, 0, 0, 1000))
+            .Subscribe(_ => UpdateSidebarBadges())
+            .AddTo(gameObject);
+        songMetaManager.RemovedSongMetaEventStream
+            .Throttle(new TimeSpan(0, 0, 0, 0, 1000))
+            .Subscribe(_ => UpdateSidebarBadges())
+            .AddTo(gameObject);
+    }
+
+    private void UpdateSidebarBadges()
+    {
+        IReadOnlyCollection<SongMeta> all = songMetaManager.GetSongMetas();
+        int total = all.Count;
+        int downloadedCount = all.Count(s => SongMetaUtils.AudioResourceExists(s));
+        int artistCount = all.Select(s => (s.Artist ?? "").Trim().ToLowerInvariant())
+            .Where(a => !string.IsNullOrEmpty(a)).Distinct().Count();
+        int genreCount = all.Select(s => (s.Genre ?? "").Trim().ToLowerInvariant())
+            .Where(g => !string.IsNullOrEmpty(g)).Distinct().Count();
+        int decadeCount = all.Where(s => s.Year > 0).Select(s => (s.Year / 10) * 10).Distinct().Count();
+
+        SetBadge(snNavAllSongsCount, total);
+        SetBadge(snNavArtistsCount, artistCount);
+        SetBadge(snNavGenresCount, genreCount);
+        SetBadge(snNavDecadeCount, decadeCount);
+        SetBadge(snNavDownloadedCount, downloadedCount);
+
+        if (snLibraryCount != null)
+        {
+            snLibraryCount.text = total > 0 ? $"{total:N0} · A–Z" : "A–Z";
+        }
+    }
+
+    private static void SetBadge(Label badge, int value)
+    {
+        if (badge == null) return;
+        if (value <= 0)
+        {
+            badge.style.display = DisplayStyle.None;
+        }
+        else
+        {
+            badge.style.display = DisplayStyle.Flex;
+            badge.text = value.ToString("N0");
+        }
+    }
+
+    private void InitFeaturedRow()
+    {
+        if (snFeaturedCards == null || snFeaturedCards.childCount == 0)
+        {
+            return;
+        }
+
+        List<SongMeta> all = songMetaManager.GetSongMetas().ToList();
+        if (all.Count == 0)
+        {
+            return;
+        }
+
+        // Date-seeded random — same picks all session, changes daily
+        int seed = DateTime.Today.Year * 10000 + DateTime.Today.Month * 100 + DateTime.Today.Day;
+        System.Random rng = new System.Random(seed);
+
+        // Prefer fully-downloaded songs (with audio + cover) so featured row shows real art
+        List<SongMeta> withAudio = all.Where(s => SongMetaUtils.AudioResourceExists(s)).ToList();
+        List<SongMeta> pool = withAudio.Count >= snFeaturedCards.childCount ? withAudio : all;
+
+        // Shuffle deterministically
+        List<SongMeta> shuffled = pool.OrderBy(_ => rng.Next()).ToList();
+
+        int max = Math.Min(snFeaturedCards.childCount, 4);
+        for (int i = 0; i < max && i < shuffled.Count; i++)
+        {
+            SongMeta pick = shuffled[i];
+            VisualElement card = snFeaturedCards[i];
+            BindFeaturedCard(card, pick);
+        }
+    }
+
+    private void BindFeaturedCard(VisualElement card, SongMeta pick)
+    {
+        Label title = card.Q<Label>("featuredTitle");
+        Label sub = card.Q<Label>("featuredSub");
+        Label letter = card.Q<Label>("featuredLetter");
+        VisualElement art = card.Q<VisualElement>("featuredArt");
+
+        if (title != null)
+        {
+            title.text = string.IsNullOrEmpty(pick.Title) ? "—" : pick.Title;
+        }
+        if (sub != null)
+        {
+            string artist = string.IsNullOrEmpty(pick.Artist) ? "Unknown" : pick.Artist;
+            sub.text = pick.Year > 0 ? $"{artist} · {pick.Year}" : artist;
+        }
+
+        // Paint letter palette block synchronously
+        if (art != null)
+        {
+            (Color32 bg, Color32 fg) = LetterArtUtils.GetColors(pick.Artist ?? pick.Title ?? "");
+            art.style.backgroundImage = new StyleBackground(StyleKeyword.None);
+            art.style.backgroundColor = new StyleColor((Color)bg);
+            if (letter != null)
+            {
+                letter.text = LetterArtUtils.GetLetter(pick);
+                letter.style.color = new StyleColor((Color)fg);
+                letter.style.display = DisplayStyle.Flex;
+            }
+        }
+
+        // Try to swap to real cover image asynchronously
+        TrySetFeaturedCover(art, letter, pick);
+
+        // Click → select song in library list
+        SongMeta captured = pick;
+        card.RegisterCallback<ClickEvent>(_ =>
+        {
+            SongMeta match = songMetaManager.GetSongMetas()
+                .FirstOrDefault(s => ReferenceEquals(s, captured));
+            if (match != null)
+            {
+                songRouletteControl.SelectEntryBySongMeta(match);
+            }
+        });
+    }
+
+    private async void TrySetFeaturedCover(VisualElement art, Label letter, SongMeta songMeta)
+    {
+        if (art == null)
+        {
+            return;
+        }
+        try
+        {
+            string uri = await SongMetaImageUtils.GetCoverOrBackgroundImageUriAsync(songMeta);
+            if (uri.IsNullOrEmpty())
+            {
+                return;
+            }
+            Sprite sprite = await ImageManager.LoadSpriteFromUriAsync(uri);
+            if (sprite == null)
+            {
+                return;
+            }
+            art.style.backgroundImage = new StyleBackground(sprite);
+            art.style.unityBackgroundImageTintColor = new StyleColor(Color.white);
+            if (letter != null)
+            {
+                letter.style.display = DisplayStyle.None;
+            }
+        }
+        catch (Exception)
+        {
+            // Letter fallback already applied
+        }
+    }
+
+    private void InitSidebarNav()
+    {
+        void SetActiveNav(Button active)
+        {
+            foreach (Button btn in new[] { snNavAllSongs, snNavArtists, snNavGenres, snNavDecade, snNavDownloaded })
+            {
+                if (btn == null) continue;
+                btn.RemoveFromClassList("sn-nav-active");
+            }
+            active?.AddToClassList("sn-nav-active");
+        }
+
+        snNavAllSongs?.RegisterCallbackButtonTriggered(_ =>
+        {
+            showOnlyDownloaded = false;
+            songSearchControl.ResetSearchText();
+            songOrderDropdownFieldControl.Selection = ESongOrder.Artist;
+            SetActiveNav(snNavAllSongs);
+        });
+
+        snNavArtists?.RegisterCallbackButtonTriggered(_ =>
+        {
+            showOnlyDownloaded = false;
+            songSearchControl.ResetSearchText();
+            songOrderDropdownFieldControl.Selection = ESongOrder.Artist;
+            songSearchControl.FocusSearchTextField();
+            SetActiveNav(snNavArtists);
+        });
+
+        snNavGenres?.RegisterCallbackButtonTriggered(_ =>
+        {
+            showOnlyDownloaded = false;
+            songSearchControl.ResetSearchText();
+            songOrderDropdownFieldControl.Selection = ESongOrder.Genre;
+            songSearchControl.FocusSearchTextField();
+            SetActiveNav(snNavGenres);
+        });
+
+        snNavDecade?.RegisterCallbackButtonTriggered(_ =>
+        {
+            showOnlyDownloaded = false;
+            songSearchControl.ResetSearchText();
+            songOrderDropdownFieldControl.Selection = ESongOrder.Year;
+            songSearchControl.FocusSearchTextField();
+            SetActiveNav(snNavDecade);
+        });
+
+        snNavDownloaded?.RegisterCallbackButtonTriggered(_ =>
+        {
+            showOnlyDownloaded = !showOnlyDownloaded;
+            UpdateFilteredSongs();
+            SetActiveNav(showOnlyDownloaded ? snNavDownloaded : snNavAllSongs);
+        });
     }
 
     private void OnFuzzySearchTextChanged(string newValue)
@@ -408,7 +667,7 @@ public class SongSelectSceneControl : MonoBehaviour, INeedInjection, IBinder, II
     {
         using IDisposable d = ProfileMarkerUtils.Auto("SongSelectScene.InitSongRouletteSongMetas");
 
-        if (sceneData.SongMeta != null)
+        if (sceneData.SongMeta != null && !sceneData.JumpToSong)
         {
             // Returning from sing scene: clear search and start at a random song
             songSearchControl.ResetSearchText();
@@ -419,7 +678,19 @@ public class SongSelectSceneControl : MonoBehaviour, INeedInjection, IBinder, II
         songRouletteControl.SelectionClickedEventStream
             .Subscribe(_ => AttemptStartSelectedEntry());
 
-        // On first entry or after sing, start at a random position rather than always first song
+        if (sceneData.JumpToSong && sceneData.SongMeta != null)
+        {
+            SongMeta match = songMetaManager.GetSongMetas()
+                .FirstOrDefault(s =>
+                    string.Equals(s.Artist, sceneData.SongMeta.Artist, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(s.Title, sceneData.SongMeta.Title, StringComparison.OrdinalIgnoreCase));
+            if (match != null)
+            {
+                songRouletteControl.SelectEntryBySongMeta(match);
+                return;
+            }
+        }
+
         SelectRandomSong();
     }
 
@@ -677,13 +948,19 @@ public class SongSelectSceneControl : MonoBehaviour, INeedInjection, IBinder, II
 
                 if (status == "complete")
                 {
+                    string dlArtist = ExtractJsonString(json, "artist");
+                    string dlTitle = ExtractJsonString(json, "title");
                     progressBar.value = 100;
-                    statusLabel.text = "Download complete! Starting song...";
+                    statusLabel.text = "Download complete! Opening song...";
                     await Awaitable.WaitForSecondsAsync(0.5f);
                     dlg.CloseDialog();
                     songMetaManager.RescanSongs();
                     await Awaitable.WaitForSecondsAsync(2f);
-                    sceneNavigator.LoadScene(EScene.SongSelectScene);
+                    sceneNavigator.LoadScene(EScene.SongSelectScene, new SongSelectSceneData
+                    {
+                        SongMeta = new UltraStarSongMeta { Artist = dlArtist, Title = dlTitle },
+                        JumpToSong = true,
+                    });
                     return;
                 }
 
@@ -1022,6 +1299,7 @@ public class SongSelectSceneControl : MonoBehaviour, INeedInjection, IBinder, II
             .Where(PlaylistMatches)
             .Where(ActiveFiltersMatches)
             .Where(CurrentFolderMatches)
+            .Where(s => !showOnlyDownloaded || SongMetaUtils.AudioResourceExists(s))
             .GroupBy(songMeta => SongMetaUtils.GetAbsoluteSongMetaFilePath(songMeta)?.ToLowerInvariant() ?? $"{songMeta.Artist?.ToLowerInvariant()}|{songMeta.Title?.ToLowerInvariant()}")
             .Select(g => g.OrderBy(s => SongMetaUtils.AudioResourceExists(s) ? 0 : 1).First())
             .OrderBy(songMeta => SongMetaUtils.AudioResourceExists(songMeta) ? 0 : 1)
