@@ -45,6 +45,7 @@ public class SongMetaScanner
     }
 
     private CancellationTokenSource songScanCancellationTokenSource;
+    private HashSet<string> cachedTxtPaths = new();
 
     public SongMetaScanner(SongMetaCollection target, Settings settings)
     {
@@ -71,7 +72,10 @@ public class SongMetaScanner
         songScanCancellationTokenSource?.Cancel();
         songScanCancellationTokenSource = new();
         string generatedSongFolderAbsolutePath = SettingsUtils.GetGeneratedSongFolderAbsolutePath(settings);
-        Task.Run(async () => await ScanSongsAsync(generatedSongFolderAbsolutePath, songScanCancellationTokenSource.Token));
+        // Capture on main thread — Application.persistentDataPath is main-thread-only
+        string cachePath = SongIndexCache.GetCachePath();
+        Task.Run(async () => await ScanSongsAsync(generatedSongFolderAbsolutePath, cachePath, songScanCancellationTokenSource.Token));
+
     }
 
     public void RescanSongs()
@@ -81,6 +85,9 @@ public class SongMetaScanner
         targetSongCount = 0;
         isSongScanStarted = false;
         isSongScanFinished = false;
+        cachedTxtPaths = new HashSet<string>();
+        string cachePath = SongIndexCache.GetCachePath();
+        SongIndexCache.Clear(cachePath);
 
         ScanSongsIfNotDoneYet();
     }
@@ -101,17 +108,51 @@ public class SongMetaScanner
         Debug.LogError("Song scan did not finish - timeout reached.");
     }
 
-    private async Task ScanSongsAsync(string generatedSongFolderAbsolutePath, CancellationToken cancellationToken)
+    private async Task ScanSongsAsync(string generatedSongFolderAbsolutePath, string cachePath, CancellationToken cancellationToken)
     {
-        Debug.Log($"Started song scan on thread {Thread.CurrentThread.ManagedThreadId}");
+        Debug.Log($"Song scan started on thread {Thread.CurrentThread.ManagedThreadId}");
         Stopwatch stopwatch = new Stopwatch();
         stopwatch.Start();
 
+        cachedTxtPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Load cache (path resolved on main thread — safe to use here)
+        List<SongIndexCache.CacheEntry> cacheEntries = SongIndexCache.Load(cachePath);
+        bool cacheHit = false;
+
+        if (cacheEntries.Count > 0)
+        {
+            foreach (SongIndexCache.CacheEntry entry in cacheEntries)
+            {
+                if (cancellationToken.IsCancellationRequested) break;
+                if (!SongIndexCache.IsCacheEntryFresh(entry)) continue;
+                try
+                {
+                    LazyLoadedFromFileSongMeta songMeta = new LazyLoadedFromFileSongMeta(entry.txtPath, null, settings.UseUniversalCharsetDetector);
+                    songMetaCollection.Add(songMeta);
+                    cachedTxtPaths.Add(entry.txtPath);
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"SongIndexCache: skipping bad entry {entry.txtPath}: {ex.Message}");
+                }
+            }
+
+            if (cachedTxtPaths.Count > 0)
+            {
+                cacheHit = true;
+                Debug.Log($"SongIndexCache: loaded {cachedTxtPaths.Count} songs from cache in {stopwatch.ElapsedMilliseconds} ms — skipping folder scan");
+                isSongScanFinished = true;
+                songScanFinishedEventStream.OnNext(new SongScanFinishedEvent(songMetaCollection.Count));
+                return;
+            }
+        }
+
+        // No cache — do the full folder scan once, then save cache for next run
         try
         {
             DirectoryUtils.CreateDirectory(generatedSongFolderAbsolutePath);
 
-            // Find all txt and audio files in configured song folders and the generated song folder
             List<string> allSongFolders = SettingsUtils.GetEnabledSongFolders(settings)
                 .Union(new List<string> { generatedSongFolderAbsolutePath })
                 .ToList();
@@ -126,8 +167,19 @@ public class SongMetaScanner
         }
         finally
         {
+            if (!cacheHit)
+            {
+                List<SongIndexCache.CacheEntry> newEntries = new();
+                foreach (SongMeta meta in songMetaCollection.SongMetas)
+                {
+                    if (meta.FileInfo == null) continue;
+                    newEntries.Add(SongIndexCache.CreateFromTxtFile(meta.FileInfo.FullName));
+                }
+                SongIndexCache.Save(cachePath, newEntries);
+            }
+
             isSongScanFinished = true;
-            Debug.Log($"Finished song-scan-thread after {stopwatch.ElapsedMilliseconds} ms. Found {songMetaCollection.Count} songs.");
+            Debug.Log($"Song scan done in {stopwatch.ElapsedMilliseconds} ms. Found {songMetaCollection.Count} songs.");
             songScanFinishedEventStream.OnNext(new SongScanFinishedEvent(songMetaCollection.Count));
         }
     }
