@@ -406,7 +406,7 @@ public class SongSelectEntryControl : INeedInjection, IInjectionFinishedListener
 
         notAvailableInOnlineGameIcon.HideByDisplay();
 
-        // Paint letter fallback synchronously so winged-mic NoCover never shows
+        // Letter fallback first — kills NoCover.png winged-mic instantly
         LetterArtUtils.ApplyLetterFallback(songMeta, songImageOuter, songImageInner, songCoverLetter);
 
         try
@@ -419,7 +419,6 @@ public class SongSelectEntryControl : INeedInjection, IInjectionFinishedListener
 
             if (uri.IsNullOrEmpty())
             {
-                // No cover — letter fallback already applied above
                 return;
             }
 
@@ -439,12 +438,7 @@ public class SongSelectEntryControl : INeedInjection, IInjectionFinishedListener
         catch (Exception ex)
         {
             Debug.LogException(ex);
-
-            if (SongEntryChanged(songMeta))
-            {
-                return;
-            }
-            // Letter fallback already applied
+            // letter fallback already applied
         }
     }
 

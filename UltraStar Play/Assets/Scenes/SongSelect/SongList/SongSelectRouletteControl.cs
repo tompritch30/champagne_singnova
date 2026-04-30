@@ -93,7 +93,7 @@ public class SongRouletteControl : MonoBehaviour, INeedInjection
 
         songListView.fixedItemHeight = RowHeight;
         songListView.selectionType = SelectionType.Single;
-        songListView.virtualizationMethod = CollectionVirtualizationMethod.FixedHeight;
+        songListView.virtualizationMethod = UnityEngine.UIElements.CollectionVirtualizationMethod.FixedHeight;
 
         songListView.RegisterCallback<KeyDownEvent>(evt =>
         {
