@@ -231,8 +231,7 @@ public class SongSelectSceneInputControl : MonoBehaviour, INeedInjection
             return false;
         }
         return elementUnderPointer == songListView
-               || elementUnderPointer.GetFirstAncestorOfType<ListView>() != null
-               || elementUnderPointer.GetFirstAncestorOfType<ListViewH>() != null;
+               || elementUnderPointer.GetFirstAncestorOfType<ListView>() != null;
     }
 
     private void OnBack()

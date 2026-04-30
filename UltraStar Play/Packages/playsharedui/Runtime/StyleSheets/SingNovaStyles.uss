@@ -7,6 +7,7 @@
 
 .unity-button {
     background-color: var(--sn-surface);
+    background-image: none;
     border-width: 1px;
     border-color: var(--sn-border-2);
     border-radius: 6px;
@@ -19,7 +20,12 @@
 
 .unity-button:hover {
     background-color: var(--sn-surface-3);
+    background-image: none;
     border-color: var(--sn-border-3);
+}
+
+.unity-button:focus {
+    background-image: none;
 }
 
 .unity-base-text-field__input,
@@ -372,6 +378,7 @@
 
 .unity-button.sn-nav-item {
     background-color: rgba(0, 0, 0, 0);
+    background-image: none;
     border-width: 0;
     border-radius: 6px;
     padding-top: 8px;
@@ -393,6 +400,7 @@
 .unity-button.sn-nav-item:hover,
 .unity-button.sn-nav-item:focus {
     background-color: var(--sn-surface);
+    background-image: none;
     border-color: rgba(0, 0, 0, 0);
 }
 
@@ -422,6 +430,12 @@
     padding-right: 6px;
     padding-bottom: 1px;
     padding-left: 6px;
+    white-space: nowrap;
+}
+
+/* hide badge pill when no text content */
+.sn-nav-badge:empty {
+    display: none;
 }
 
 /* Song entry card — dark compact variant */

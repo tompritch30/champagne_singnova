@@ -83,7 +83,7 @@ public class SongMetaScanner
         isSongScanStarted = false;
         isSongScanFinished = false;
         cachedTxtPaths = new HashSet<string>();
-        SongIndexCache.Save(new List<SongIndexCache.CacheEntry>());
+        SongIndexCache.Clear();
 
         ScanSongsIfNotDoneYet();
     }
@@ -112,14 +112,13 @@ public class SongMetaScanner
 
         cachedTxtPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // Pre-populate from disk cache so UI shows songs immediately
         List<SongIndexCache.CacheEntry> cacheEntries = SongIndexCache.Load();
         if (cacheEntries.Count > 0)
         {
             foreach (SongIndexCache.CacheEntry entry in cacheEntries)
             {
                 if (cancellationToken.IsCancellationRequested) break;
-                if (!SongIndexCache.IsFresh(entry)) continue;
+                if (!SongIndexCache.IsCacheEntryFresh(entry)) continue;
                 try
                 {
                     LazyLoadedFromFileSongMeta songMeta = new(entry.txtPath, null, settings.UseUniversalCharsetDetector);
@@ -131,19 +130,22 @@ public class SongMetaScanner
                     Debug.LogWarning($"SongIndexCache: skipping stale entry {entry.txtPath}: {ex.Message}");
                 }
             }
-
-            if (cachedTxtPaths.Count > 0)
-            {
-                Debug.Log($"SongIndexCache: pre-populated {cachedTxtPaths.Count} songs from cache in {stopwatch.ElapsedMilliseconds} ms");
-                songScanFinishedEventStream.OnNext(new SongScanFinishedEvent(songMetaCollection.Count));
-            }
         }
 
+        if (cachedTxtPaths.Count > 0)
+        {
+            // Cache hit — skip directory walk entirely. RescanSongs() clears cache to force a fresh walk.
+            Debug.Log($"SongIndexCache: loaded {cachedTxtPaths.Count} songs from cache in {stopwatch.ElapsedMilliseconds} ms. Skipping directory scan.");
+            isSongScanFinished = true;
+            songScanFinishedEventStream.OnNext(new SongScanFinishedEvent(songMetaCollection.Count));
+            return;
+        }
+
+        // Cache empty — first run or after explicit reindex. Walk directories and build cache.
         try
         {
             DirectoryUtils.CreateDirectory(generatedSongFolderAbsolutePath);
 
-            // Find all txt and audio files in configured song folders and the generated song folder
             List<string> allSongFolders = SettingsUtils.GetEnabledSongFolders(settings)
                 .Union(new List<string> { generatedSongFolderAbsolutePath })
                 .ToList();
@@ -158,18 +160,17 @@ public class SongMetaScanner
         }
         finally
         {
-            // Save updated cache from the complete collection
             List<SongIndexCache.CacheEntry> newEntries = new();
             foreach (SongMeta meta in songMetaCollection.SongMetas)
             {
                 if (meta.FileInfo == null) continue;
-                SongIndexCache.CacheEntry entry = SongIndexCache.TryCreateEntry(meta.FileInfo.FullName);
+                SongIndexCache.CacheEntry entry = SongIndexCache.CreateFromTxtFile(meta.FileInfo.FullName);
                 if (entry != null) newEntries.Add(entry);
             }
             SongIndexCache.Save(newEntries);
 
             isSongScanFinished = true;
-            Debug.Log($"Finished song-scan-thread after {stopwatch.ElapsedMilliseconds} ms. Found {songMetaCollection.Count} songs.");
+            Debug.Log($"Finished directory scan after {stopwatch.ElapsedMilliseconds} ms. Found {songMetaCollection.Count} songs.");
             songScanFinishedEventStream.OnNext(new SongScanFinishedEvent(songMetaCollection.Count));
         }
     }

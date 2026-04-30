@@ -45,7 +45,7 @@ public class SongSelectPlayerEntryControl : INeedInjection, IInjectionFinishedLi
     private Button togglePlayerSelectedButton;
 
     [Inject(UxmlName = R.UxmlNames.songListView)]
-    private ListViewH songListView;
+    private ListView songListView;
 
     [Inject(UxmlName = R.UxmlNames.changeVoiceButton)]
     private Button changeVoiceButton;
