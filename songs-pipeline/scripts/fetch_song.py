@@ -21,6 +21,7 @@ from _common import (
     download_video,
     extract_audio_from_video,
     patch_txt_for_ultrastar,
+    sanitize_filename,
     get_db,
     load_config,
     setup_logging,
@@ -32,13 +33,8 @@ if TYPE_CHECKING:
     from _common import UsdbSession as _UsdbSession
 
 
-def _sanitize(name: str) -> str:
-    """Make a string safe for use as a folder name."""
-    return re.sub(r'[\\/:*?"<>|]', "_", name).strip(". ")
-
-
 def _folder_for(artist: str, title: str, base: Path) -> Path:
-    return base / f"{_sanitize(artist)} - {_sanitize(title)}"
+    return base / f"{sanitize_filename(artist)} - {sanitize_filename(title)}"
 
 
 def _smart_search(session: "UsdbSession", query: str, log) -> list[dict]:  # noqa: ANN001
@@ -215,19 +211,19 @@ def fetch(query: str, usdb_id: str | None, cfg: dict, log) -> bool:  # noqa: ANN
     #   (b) Rewrite #VIDEO from USDB's "v=ID,..." format to local "video.mp4"
     has_audio = False
     if video_path and video_path.exists():
-        # Read #MP3 filename from song.txt
-        mp3_filename = f"{artist} - {title}.mp3"
+        # Read #MP3 filename from song.txt; normalize to ASCII-safe name
+        mp3_filename = f"{sanitize_filename(artist)} - {sanitize_filename(title)}.mp3"
         if txt_path.exists():
             for line in txt_path.read_text(encoding="utf-8", errors="replace").splitlines():
                 if line.upper().startswith("#MP3:"):
-                    mp3_filename = line.split(":", 1)[1].strip()
+                    mp3_filename = sanitize_filename(line.split(":", 1)[1].strip())
                     break
         audio_dest = folder / mp3_filename
         log.info(f"  Extracting audio -> {mp3_filename}")
         has_audio = extract_audio_from_video(video_path, audio_dest, log)
 
-        # Patch #VIDEO tag so UltraStar Play finds the local file
-        patch_txt_for_ultrastar(txt_path, video_path.name, log)
+        # Patch #VIDEO, #MP3, #USDBID tags; add #ENCODING:UTF8
+        patch_txt_for_ultrastar(txt_path, video_path.name, mp3_filename, sid, log)
 
     # --- 5. Download cover ---
     has_cover = False

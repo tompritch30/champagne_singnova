@@ -545,11 +545,32 @@ public class SongSelectSceneControl : MonoBehaviour, INeedInjection, IBinder, II
             return;
         }
 
-        // If this is a USDB catalog stub (no audio yet), auto-download then play.
-        string usdbId = songMeta.GetAdditionalHeaderEntry("USDBID");
-        if (!usdbId.IsNullOrEmpty() && !SongMetaUtils.AudioResourceExists(songMeta))
+        // If audio is missing, try to download it via the local API server.
+        if (!SongMetaUtils.AudioResourceExists(songMeta))
         {
-            await DownloadThenPlayAsync(songMeta, usdbId);
+            string usdbId = songMeta.GetAdditionalHeaderEntry("USDBID");
+
+            // No USDBID in txt — look it up by artist/title from the API
+            if (usdbId.IsNullOrEmpty())
+            {
+                usdbId = await LookupUsdbIdAsync(songMeta.Artist, songMeta.Title);
+            }
+
+            if (usdbId == null)
+            {
+                Debug.LogWarning($"API server unreachable for '{songMeta.Artist} - {songMeta.Title}'");
+                NotificationManager.CreateNotification(Translation.Of("Download server unavailable. Start api_server.py and try again."));
+                return;
+            }
+
+            if (!usdbId.IsNullOrEmpty())
+            {
+                await DownloadThenPlayAsync(songMeta, usdbId);
+                return;
+            }
+
+            Debug.LogWarning($"Song not in catalog: '{songMeta.Artist} - {songMeta.Title}'");
+            NotificationManager.CreateNotification(Translation.Of("Song not found in download catalog."));
             return;
         }
 
@@ -563,17 +584,6 @@ public class SongSelectSceneControl : MonoBehaviour, INeedInjection, IBinder, II
             }
 
             ShowAskToCreateSingAlongDataDialog(songMeta);
-            return;
-        }
-
-        // Check that the audio file exists
-        if (!SongMetaUtils.AudioResourceExists(songMeta))
-        {
-            string audioUri = SongMetaUtils.GetAudioUri(songMeta);
-            Translation errorMessage = Translation.Get(R.Messages.songSelectScene_error_audioNotFound,
-                "name", audioUri);
-            Debug.LogWarning(errorMessage);
-            NotificationManager.CreateNotification(errorMessage);
             return;
         }
 
@@ -642,22 +652,13 @@ public class SongSelectSceneControl : MonoBehaviour, INeedInjection, IBinder, II
             return;
         }
 
-        // Poll until complete, failed, or cancelled
-        float[] stageProgress = { 5f, 15f, 35f, 55f, 75f, 90f, 95f };
-        string[] stageLabels =
-        {
-            "Fetching song info...",
-            "Downloading audio...",
-            "Downloading audio...",
-            "Downloading video...",
-            "Downloading video...",
-            "Processing files...",
-            "Almost done..."
-        };
-
+        // Poll until complete, failed, or cancelled.
+        // Poll immediately first (catches "already complete" without waiting 3s).
+        bool videoStageObserved = false;
         for (int attempt = 0; attempt < 120; attempt++)
         {
-            await Awaitable.WaitForSecondsAsync(3f);
+            if (attempt > 0)
+                await Awaitable.WaitForSecondsAsync(3f);
 
             if (downloadCancelled)
                 return;
@@ -673,21 +674,61 @@ public class SongSelectSceneControl : MonoBehaviour, INeedInjection, IBinder, II
 
                 string json = poll.downloadHandler.text;
                 string status = ExtractJsonString(json, "status");
-                bool running = json.Contains("\"running\":true");
 
                 if (status == "complete")
                 {
                     progressBar.value = 100;
-                    statusLabel.text = "Download complete! Starting song...";
-                    await Awaitable.WaitForSecondsAsync(0.5f);
-                    dlg.CloseDialog();
+                    statusLabel.text = "Download complete! Loading song...";
+
                     songMetaManager.RescanSongs();
-                    await Awaitable.WaitForSecondsAsync(2f);
-                    sceneNavigator.LoadScene(EScene.SongSelectScene);
+
+                    float waitedSecs = 0f;
+                    const float timeoutSecs = 30f;
+                    SongMeta freshSongMeta = null;
+                    bool allFilesReady = false;
+                    while (waitedSecs < timeoutSecs)
+                    {
+                        await Awaitable.WaitForSecondsAsync(1f);
+                        waitedSecs += 1f;
+
+                        if (!songMetaManager.IsSongScanFinished)
+                            continue;
+
+                        freshSongMeta = songMetaManager.GetSongMetas()
+                            .FirstOrDefault(s => s.Artist == songMeta.Artist && s.Title == songMeta.Title);
+
+                        if (freshSongMeta == null)
+                            continue;
+
+                        bool audioReady = SongMetaUtils.AudioResourceExists(freshSongMeta);
+                        bool videoReady = SongMetaUtils.VideoResourceExists(freshSongMeta, _ => false);
+
+                        statusLabel.text = videoStageObserved
+                            ? $"audio:{(audioReady ? "✓" : "…")} video:{(videoReady ? "✓" : "…")}"
+                            : $"audio:{(audioReady ? "✓" : "…")}";
+
+                        if (audioReady && (!videoStageObserved || videoReady))
+                        {
+                            allFilesReady = true;
+                            break;
+                        }
+                    }
+
+                    dlg.CloseDialog();
+
+                    if (allFilesReady)
+                    {
+                        StartSingSceneWithGivenSongAndSettings(freshSongMeta, false, true);
+                    }
+                    else
+                    {
+                        NotificationManager.CreateNotification(Translation.Of("Download incomplete. Please try again."));
+                        sceneNavigator.LoadScene(EScene.SongSelectScene);
+                    }
                     return;
                 }
 
-                if (status == "failed" || (!running && status != "indexed" && attempt > 5))
+                if (status == "failed")
                 {
                     statusLabel.text = "Download failed. Check api_server.py logs.";
                     progressBar.value = 0;
@@ -695,10 +736,32 @@ public class SongSelectSceneControl : MonoBehaviour, INeedInjection, IBinder, II
                     return;
                 }
 
-                // Animate progress through stages while running
-                int stage = Mathf.Min(attempt, stageProgress.Length - 1);
-                progressBar.value = stageProgress[stage];
-                statusLabel.text = stageLabels[stage];
+                // Show real progress from server
+                string stage = ExtractJsonString(json, "stage");
+                float pct = ExtractJsonFloat(json, "stage_percent");
+                string speed = ExtractJsonString(json, "speed");
+                string eta = ExtractJsonString(json, "eta");
+
+                if (stage == "video")
+                    videoStageObserved = true;
+
+                string stageLabel = stage switch
+                {
+                    "login" or "metadata" or "txt" => "Fetching song info...",
+                    "video" => $"Downloading video  {pct:0}%{(!string.IsNullOrEmpty(eta) ? $"  ETA {eta}" : "")}",
+                    "audio" => $"Downloading audio  {pct:0}%{(!string.IsNullOrEmpty(eta) ? $"  ETA {eta}" : "")}",
+                    "processing" => "Processing...",
+                    _ => "Starting...",
+                };
+                statusLabel.text = stageLabel;
+                progressBar.value = stage switch
+                {
+                    "login" or "metadata" or "txt" => 5f,
+                    "video" => 10f + pct * 0.45f,
+                    "audio" => 55f + pct * 0.4f,
+                    "processing" => 97f,
+                    _ => progressBar.value,
+                };
             }
             catch
             {
@@ -710,15 +773,57 @@ public class SongSelectSceneControl : MonoBehaviour, INeedInjection, IBinder, II
         dlg.AddButton(Translation.Of("OK"), _ => dlg.CloseDialog());
     }
 
+    // Returns: null = API unreachable, "" = API up but song not found, "id" = found
+    private static async Awaitable<string> LookupUsdbIdAsync(string artist, string title)
+    {
+        string[] queries =
+        {
+            $"{artist} {title}",
+            title,
+            artist,
+        };
+        foreach (string query in queries)
+        {
+            try
+            {
+                string q = Uri.EscapeDataString(query);
+                using UnityWebRequest req = UnityWebRequest.Get($"http://127.0.0.1:5123/api/search?q={q}&limit=10");
+                req.timeout = 5;
+                await WebRequestUtils.SendWebRequestAsync(req);
+                string json = req.downloadHandler.text;
+                string usdbId = ExtractJsonString(json, "usdb_id");
+                if (!usdbId.IsNullOrEmpty())
+                    return usdbId;
+            }
+            catch
+            {
+                return null; // API unreachable
+            }
+        }
+        return ""; // API reachable but no match
+    }
+
     private static string ExtractJsonString(string json, string key)
     {
-        // Minimal JSON string field extractor — avoids a JSON library import in this file.
         string search = $"\"{key}\":\"";
         int start = json.IndexOf(search, StringComparison.Ordinal);
         if (start < 0) return "";
         start += search.Length;
         int end = json.IndexOf('"', start);
         return end < 0 ? "" : json.Substring(start, end - start);
+    }
+
+    private static float ExtractJsonFloat(string json, string key)
+    {
+        string search = $"\"{key}\":";
+        int start = json.IndexOf(search, StringComparison.Ordinal);
+        if (start < 0) return 0f;
+        start += search.Length;
+        int end = start;
+        while (end < json.Length && (char.IsDigit(json[end]) || json[end] == '.' || json[end] == '-'))
+            end++;
+        return float.TryParse(json.Substring(start, end - start), System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out float v) ? v : 0f;
     }
 
     private void ShowFailedToLoadVoicesDialog(SongMeta songMeta)

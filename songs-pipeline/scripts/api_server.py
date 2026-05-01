@@ -36,8 +36,44 @@ _handler = logging.FileHandler(_API_LOG_PATH, encoding='utf-8')
 _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
 _api_logger.addHandler(_handler)
 
+import os as _os
+import re as _re
+
 _downloads_lock = threading.Lock()
 _downloads: dict[str, subprocess.Popen] = {}  # usdb_id -> running Popen
+_progress: dict[str, dict] = {}  # usdb_id -> {stage, percent, speed, eta}
+
+_YTDLP_PERCENT_RE = _re.compile(r'\[download\]\s+(\d+\.?\d*)%(?:.*?at\s+(\S+).*?ETA\s+(\S+))?')
+_YTDLP_DEST_RE = _re.compile(r'\[download\] Destination: (.+)')
+
+
+def _update_progress(usdb_id: str, line: str) -> None:
+    p = _progress.setdefault(usdb_id, {"stage": "initializing", "percent": 0, "speed": "", "eta": ""})
+    low = line.lower()
+    if "logging in" in low:
+        p["stage"] = "login"
+    elif "login ok" in low or "indexed metadata" in low or "fetching" in low or "usdb match" in low:
+        p["stage"] = "metadata"
+    elif "downloading song.txt" in low:
+        p["stage"] = "txt"
+    elif "already complete" in low:
+        p.update({"stage": "complete", "percent": 100, "speed": "", "eta": ""})
+    elif "[merger]" in low or "merging" in low or "post-process" in low:
+        p["stage"] = "processing"
+        p["percent"] = 99
+    dest_m = _YTDLP_DEST_RE.search(line)
+    if dest_m:
+        dest = dest_m.group(1).lower()
+        is_video = any(ext in dest for ext in (".mp4", ".webm", ".mkv", "video"))
+        p["stage"] = "video" if is_video else "audio"
+        p["percent"] = 0
+        p["speed"] = ""
+        p["eta"] = ""
+    pct_m = _YTDLP_PERCENT_RE.search(line)
+    if pct_m:
+        p["percent"] = float(pct_m.group(1))
+        p["speed"] = pct_m.group(2) or ""
+        p["eta"] = pct_m.group(3) or ""
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -136,6 +172,7 @@ class Handler(BaseHTTPRequestHandler):
                 with _downloads_lock:
                     proc = _downloads.get(usdb_id)
                     running = proc is not None and proc.poll() is None
+                prog = _progress.get(usdb_id, {})
                 self._json(
                     {
                         "status": row["download_status"] or "indexed",
@@ -143,6 +180,10 @@ class Handler(BaseHTTPRequestHandler):
                         "artist": row["artist"] or "",
                         "title": row["title"] or "",
                         "folder_path": row["folder_path"] or "",
+                        "stage": prog.get("stage", ""),
+                        "stage_percent": prog.get("percent", 0),
+                        "speed": prog.get("speed", ""),
+                        "eta": prog.get("eta", ""),
                     }
                 )
             finally:
@@ -188,6 +229,7 @@ class Handler(BaseHTTPRequestHandler):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=str(cwd),
+                env={**_os.environ, "PYTHONUNBUFFERED": "1"},
             )
             with _downloads_lock:
                 _downloads[usdb_id] = new_proc
@@ -204,18 +246,38 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def _log_subprocess_result(usdb_id: str, proc: subprocess.Popen, fetch_script: Path) -> None:
-    """Wait for subprocess and log results."""
-    stdout_data, stderr_data = proc.communicate()
+    """Stream subprocess stdout/stderr live to terminal and log file."""
+    def _pipe(stream, is_err: bool):
+        for raw in iter(stream.readline, b""):
+            line = raw.decode("utf-8", errors="replace").rstrip()
+            if not line:
+                continue
+            tag = "ERR" if is_err else "OUT"
+            msg = f"[dl:{usdb_id}][{tag}] {line}"
+            print(msg, flush=True)
+            if is_err:
+                _api_logger.error(msg)
+            else:
+                _api_logger.info(msg)
+            if not is_err:
+                _update_progress(usdb_id, line)
+
+    t_out = threading.Thread(target=_pipe, args=(proc.stdout, False), daemon=True)
+    t_err = threading.Thread(target=_pipe, args=(proc.stderr, True), daemon=True)
+    t_out.start()
+    t_err.start()
+    proc.wait()
+    t_out.join()
+    t_err.join()
+
     if proc.returncode != 0:
-        stderr_output = stderr_data.decode('utf-8', errors='replace') if stderr_data else ""
-        stdout_output = stdout_data.decode('utf-8', errors='replace') if stdout_data else ""
-        _api_logger.error(f"Download failed for USDB ID {usdb_id}; exit code {proc.returncode}")
-        if stderr_output:
-            _api_logger.error(f"stderr: {stderr_output[:1000]}")
-        if stdout_output:
-            _api_logger.debug(f"stdout: {stdout_output[:1000]}")
+        msg = f"[dl:{usdb_id}] FAILED (exit {proc.returncode})"
+        print(msg, flush=True)
+        _api_logger.error(msg)
     else:
-        _api_logger.info(f"Download succeeded for USDB ID {usdb_id}")
+        msg = f"[dl:{usdb_id}] SUCCESS"
+        print(msg, flush=True)
+        _api_logger.info(msg)
 
 
 def main() -> None:

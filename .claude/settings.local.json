@@ -4,7 +4,12 @@
       "Bash(python3 *)",
       "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('SongDirs', d.get\\('songDirs', 'KEY_NOT_FOUND'\\)\\), indent=2\\)\\)\")",
       "Bash(ffmpeg -version)",
-      "Bash(python \"D:/thoma/Documents/code/champagne_singnova/songs-pipeline/scripts/fetch_song.py\" --id 25887)"
+      "Bash(python \"D:/thoma/Documents/code/champagne_singnova/songs-pipeline/scripts/fetch_song.py\" --id 25887)",
+      "PowerShell($cache = \"$env:USERPROFILE\\\\AppData\\\\LocalLow\\\\DefaultCompany\\\\UltraStar Play\\\\song_index.cache.json\"; if \\(Test-Path $cache\\) { Remove-Item $cache; Write-Output \"Deleted: $cache\" } else { Write-Output \"Not found: $cache\" })",
+      "PowerShell(Get-ChildItem \"$env:USERPROFILE\\\\AppData\\\\LocalLow\" -Recurse -Filter \"song_index.cache.json\" -ErrorAction SilentlyContinue)",
+      "PowerShell(Remove-Item \"$env:USERPROFILE\\\\AppData\\\\LocalLow\\\\ultrastar\\\\UltraStar Play\\\\song_index.cache.json\"; Write-Output \"Deleted.\")",
+      "Bash(grep -i \"\\\\.cs$\")",
+      "PowerShell(Remove-Item \"$env:USERPROFILE\\\\AppData\\\\LocalLow\\\\ultrastar\\\\UltraStar Play\\\\song_index.cache.json\" -ErrorAction SilentlyContinue; Write-Output \"Cache cleared.\")"
     ]
   }
 }

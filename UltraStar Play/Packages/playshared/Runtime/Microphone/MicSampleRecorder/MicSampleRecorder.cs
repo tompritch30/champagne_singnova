@@ -299,6 +299,14 @@ public class MicSampleRecorder : MonoBehaviour
         if (playRecordedAudio && !audioSource.isPlaying && audioSource.clip != null)
         {
             audioSource.Play();
+            // Sync playback head to current mic position so monitoring latency is
+            // just the DSP buffer (~5ms) instead of the full ring-buffer gap (~500ms).
+            int micPos = IMicrophoneAdapter.Instance.GetPosition(MicProfile.Name);
+            int safetyMarginSamples = 256;
+            if (micPos > safetyMarginSamples)
+            {
+                audioSource.timeSamples = micPos - safetyMarginSamples;
+            }
         }
         else if (!playRecordedAudio && audioSource.isPlaying)
         {

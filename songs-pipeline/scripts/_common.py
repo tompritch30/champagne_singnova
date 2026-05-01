@@ -492,6 +492,7 @@ def download_video(
         "--no-playlist",
         "--no-warnings",
         "--progress",
+        "--newline",
     ]
     if ffmpeg_dir:
         base_cmd += ["--ffmpeg-location", ffmpeg_dir]
@@ -525,6 +526,7 @@ def download_video(
             text=True,
             encoding="utf-8",
             errors="replace",
+            bufsize=1,
         )
 
         blocked_by_bot_check = False
@@ -624,6 +626,29 @@ def download_video(
 
 
 # ---------------------------------------------------------------------------
+# Filename sanitization (shared — use identically on save AND load)
+# ---------------------------------------------------------------------------
+
+_SMART_QUOTE_TABLE = str.maketrans({
+    '‘': "'", '’': "'", '‚': "'", '‛': "'",  # curly single quotes
+    '“': '"', '”': '"', '„': '"', '‟': '"',  # curly double quotes
+    '′': "'", '″': '"', '‵': "'", '‶': '"',  # primes
+    'ʼ': "'", 'ʹ': "'",                                 # modifier apostrophes
+    '´': "'", '`': "'",                                 # accent chars used as quotes
+})
+
+
+def sanitize_filename(name: str) -> str:
+    """Normalize a string to a safe cross-platform filename.
+
+    Call this identically on save (pipeline) and load (lookups) so paths
+    always match regardless of what Unicode chars USDB returns.
+    """
+    name = name.translate(_SMART_QUOTE_TABLE)
+    return re.sub(r'[\\/:*?"<>|]', "_", name).strip(". ")
+
+
+# ---------------------------------------------------------------------------
 # UltraStar Play post-processing
 # ---------------------------------------------------------------------------
 
@@ -659,21 +684,51 @@ def extract_audio_from_video(video_path: Path, audio_path: Path, log: logging.Lo
     return False
 
 
-def patch_txt_for_ultrastar(txt_path: Path, video_filename: str, log: logging.Logger | None = None) -> None:
-    """Rewrite the #VIDEO tag from USDB format to the local filename UltraStar Play expects."""
+def patch_txt_for_ultrastar(
+    txt_path: Path,
+    video_filename: str,
+    mp3_filename: str | None = None,
+    usdb_id: str | None = None,
+    log: logging.Logger | None = None,
+) -> None:
+    """Rewrite tags in a USDB song.txt for local UltraStar Play use.
+
+    - #VIDEO: replaced with local video filename
+    - #MP3: normalized to ASCII-safe filename (if mp3_filename provided)
+    - #USDBID: written so UltraStar can detect missing audio and re-download
+    - #ENCODING:UTF8 inserted if not already present
+    """
     if not txt_path.exists():
         return
     content = txt_path.read_text(encoding="utf-8", errors="replace")
     new_lines = []
+    has_encoding_tag = False
+    has_usdbid_tag = False
     for line in content.splitlines(keepends=True):
         upper = line.upper()
-        if upper.startswith("#VIDEO:"):
-            # Replace USDB's "v=ID,co=...,bg=..." with the local filename
+        if upper.startswith("#ENCODING:"):
+            has_encoding_tag = True
+            new_lines.append(line)
+        elif upper.startswith("#USDBID:"):
+            has_usdbid_tag = True
+            if usdb_id is not None:
+                new_lines.append(f"#USDBID:{usdb_id}\n")
+            else:
+                new_lines.append(line)
+        elif upper.startswith("#VIDEO:"):
             new_lines.append(f"#VIDEO:{video_filename}\n")
             if log:
                 log.info(f"  Patched #VIDEO tag -> {video_filename}")
+        elif upper.startswith("#MP3:") and mp3_filename is not None:
+            new_lines.append(f"#MP3:{mp3_filename}\n")
+            if log:
+                log.info(f"  Patched #MP3 tag -> {mp3_filename}")
         else:
             new_lines.append(line)
+    if not has_encoding_tag and new_lines:
+        new_lines.insert(1, "#ENCODING:UTF8\n")
+    if not has_usdbid_tag and usdb_id and new_lines:
+        new_lines.insert(1, f"#USDBID:{usdb_id}\n")
     txt_path.write_text("".join(new_lines), encoding="utf-8")
 
 
