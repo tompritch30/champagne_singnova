@@ -736,32 +736,40 @@ public class SongSelectSceneControl : MonoBehaviour, INeedInjection, IBinder, II
                     return;
                 }
 
-                // Show real progress from server
+                // Show real progress if server has stage data, else time-based animation
                 string stage = ExtractJsonString(json, "stage");
                 float pct = ExtractJsonFloat(json, "stage_percent");
-                string speed = ExtractJsonString(json, "speed");
                 string eta = ExtractJsonString(json, "eta");
 
                 if (stage == "video")
                     videoStageObserved = true;
 
-                string stageLabel = stage switch
+                bool hasRealStage = stage is "login" or "metadata" or "txt" or "video" or "audio" or "processing";
+                if (hasRealStage)
                 {
-                    "login" or "metadata" or "txt" => "Fetching song info...",
-                    "video" => $"Downloading video  {pct:0}%{(!string.IsNullOrEmpty(eta) ? $"  ETA {eta}" : "")}",
-                    "audio" => $"Downloading audio  {pct:0}%{(!string.IsNullOrEmpty(eta) ? $"  ETA {eta}" : "")}",
-                    "processing" => "Processing...",
-                    _ => "Starting...",
-                };
-                statusLabel.text = stageLabel;
-                progressBar.value = stage switch
+                    statusLabel.text = stage switch
+                    {
+                        "login" or "metadata" or "txt" => "Fetching song info...",
+                        "video" => $"Downloading video  {pct:0}%{(!string.IsNullOrEmpty(eta) ? $"  ETA {eta}" : "")}",
+                        "audio" => $"Downloading audio  {pct:0}%{(!string.IsNullOrEmpty(eta) ? $"  ETA {eta}" : "")}",
+                        _ => "Processing...",
+                    };
+                    progressBar.value = stage switch
+                    {
+                        "login" or "metadata" or "txt" => 5f,
+                        "video" => 10f + pct * 0.45f,
+                        "audio" => 55f + pct * 0.4f,
+                        _ => 97f,
+                    };
+                }
+                else
                 {
-                    "login" or "metadata" or "txt" => 5f,
-                    "video" => 10f + pct * 0.45f,
-                    "audio" => 55f + pct * 0.4f,
-                    "processing" => 97f,
-                    _ => progressBar.value,
-                };
+                    // No stage data yet — animate based on elapsed time so bar always moves.
+                    // Logarithmic curve: ~40% at 30s, ~65% at 90s, ~80% at 3min, never hits 90%.
+                    float elapsedSecs = attempt * 3f;
+                    statusLabel.text = "Downloading...";
+                    progressBar.value = 90f * (1f - Mathf.Exp(-elapsedSecs / 90f));
+                }
             }
             catch
             {

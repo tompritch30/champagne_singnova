@@ -90,6 +90,13 @@ public class MicSampleRecorder : MonoBehaviour
 
     public string PortAudioOutputDeviceName { get; set; }
 
+    // PortAudio direct-output monitoring (bypasses Unity DSP chain for zero-latency mic passthrough)
+    private DeviceInfo portAudioMonitorDevice;
+    private float[] monitorRingBuf;
+    private volatile int monitorWritePos;
+    private volatile int monitorReadPos;
+    private bool portAudioMonitorActive;
+
     private void Awake()
     {
         audioSource = GetComponentInChildren<AudioSource>();
@@ -206,6 +213,14 @@ public class MicSampleRecorder : MonoBehaviour
             audioSource.clip = micAudioClip;
             audioSource.loop = true;
         }
+
+        // Start PortAudio direct-output monitoring when not in PortAudio input mode.
+        // This routes mic samples outside Unity's DSP chain, eliminating latency added
+        // by the mixer when the song AudioSource is also playing.
+        if (playRecordedAudio && !IMicrophoneAdapter.Instance.UsePortAudio)
+        {
+            StartPortAudioMonitoring();
+        }
     }
 
     private string GetFinalPortAudioOutputDeviceName()
@@ -245,6 +260,8 @@ public class MicSampleRecorder : MonoBehaviour
         {
             MicSamples[i] = 0;
         }
+
+        StopPortAudioMonitoring();
     }
 
     private void UpdateRecording()
@@ -271,6 +288,17 @@ public class MicSampleRecorder : MonoBehaviour
         IMicrophoneAdapter.Instance.GetRecordedSamples(MicProfile.Name, MicProfile.ChannelIndex, micAudioClip, currentSamplePosition, MicSamples);
 
         int newSamplesCount = GetNewSampleCountInCircularBuffer(lastSamplePosition, currentSamplePosition, MicSamples.Length);
+
+        if (portAudioMonitorActive && monitorRingBuf != null && newSamplesCount > 0)
+        {
+            int startIdx = MicSamples.Length - newSamplesCount;
+            for (int i = 0; i < newSamplesCount; i++)
+            {
+                monitorRingBuf[monitorWritePos % monitorRingBuf.Length] = MicSamples[startIdx + i];
+                monitorWritePos++;
+            }
+        }
+
         NotifyListeners(newSamplesCount);
 
         lastSamplePosition = currentSamplePosition;
@@ -291,7 +319,7 @@ public class MicSampleRecorder : MonoBehaviour
 
     private void UpdateMicrophoneAudioPlayback()
     {
-        if (IMicrophoneAdapter.Instance.UsePortAudio)
+        if (IMicrophoneAdapter.Instance.UsePortAudio || portAudioMonitorActive)
         {
             return;
         }
@@ -344,8 +372,94 @@ public class MicSampleRecorder : MonoBehaviour
         return GetMaxSampleRate(maxSampleRate);
     }
 
+    private void StartPortAudioMonitoring()
+    {
+        try
+        {
+            // Prefer low-latency host APIs: WASAPI > WDM-KS > DirectSound > MME.
+            // Pa_GetDefaultHostApi on Windows usually returns MME (~50-200ms).
+            HostApi[] preferredApis = { HostApi.WASAPI, HostApi.WDMKS, HostApi.DirectSound, HostApi.MME };
+            portAudioMonitorDevice = null;
+            if (!PortAudioOutputDeviceName.IsNullOrEmpty())
+            {
+                portAudioMonitorDevice = PortAudioUtils.DeviceInfos
+                    .FirstOrDefault(d => d.Name == PortAudioOutputDeviceName && d.MaxOutputChannels > 0);
+            }
+            if (portAudioMonitorDevice == null)
+            {
+                foreach (HostApi api in preferredApis)
+                {
+                    HostApiInfo hostApiInfo = PortAudioUtils.GetHostApiInfo(api);
+                    if (hostApiInfo == null) continue;
+                    DeviceInfo dev = PortAudioUtils.GetDeviceInfo(hostApiInfo.DefaultOutputDeviceGlobalIndex);
+                    if (dev != null && dev.MaxOutputChannels > 0)
+                    {
+                        portAudioMonitorDevice = dev;
+                        break;
+                    }
+                }
+            }
+            if (portAudioMonitorDevice == null)
+                portAudioMonitorDevice = PortAudioUtils.DefaultOutputDeviceInfo;
+
+            if (portAudioMonitorDevice == null)
+            {
+                Debug.LogWarning("MicSampleRecorder: no PortAudio output device found for monitoring");
+                return;
+            }
+
+            monitorRingBuf = new float[FinalSampleRate.Value * 2]; // 2s circular buffer
+            monitorWritePos = 0;
+            monitorReadPos = 0;
+            PortAudioUtils.StartPlayback(portAudioMonitorDevice, 1, 1, FinalSampleRate.Value, OnPortAudioMonitorRead);
+            portAudioMonitorActive = true;
+            Debug.Log($"MicSampleRecorder: PortAudio monitoring started on '{portAudioMonitorDevice.Name}' via {portAudioMonitorDevice.HostApi}");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"MicSampleRecorder: PortAudio monitoring failed, falling back to AudioSource: {ex.Message}");
+            portAudioMonitorActive = false;
+        }
+    }
+
+    private void StopPortAudioMonitoring()
+    {
+        if (!portAudioMonitorActive)
+            return;
+        portAudioMonitorActive = false;
+        try
+        {
+            if (portAudioMonitorDevice != null)
+                PortAudioUtils.StopPlayback(portAudioMonitorDevice);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"MicSampleRecorder: PortAudio monitoring stop error: {ex.Message}");
+        }
+        portAudioMonitorDevice = null;
+    }
+
+    // Called from PortAudio thread — must not allocate or use Unity APIs.
+    private void OnPortAudioMonitorRead(float[] data)
+    {
+        float vol = outputVolume;
+        for (int i = 0; i < data.Length; i++)
+        {
+            if (monitorWritePos - monitorReadPos > 0)
+            {
+                data[i] = monitorRingBuf[monitorReadPos % monitorRingBuf.Length] * vol;
+                monitorReadPos++;
+            }
+            else
+            {
+                data[i] = 0f;
+            }
+        }
+    }
+
     private void OnDestroy()
     {
+        StopPortAudioMonitoring();
         DestroyAudioClips();
     }
 
